@@ -118,9 +118,10 @@ jobs:
           ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
           ECR_REPO: ${{ secrets.ECR_REPO_NAME }}
         run: |
-          # Cosign pushes .sig and .att tags alongside the real image.
-          # We must filter those out and find the latest actual image tag
-          # (which is always sha-runid format, never containing a dot).
+          # Phase 2 images have tags in sha-runid format (e.g. abc123-22801005069)
+          # which always contain a hyphen. Phase 1 tags are plain 40-char SHAs.
+          # Cosign artefacts start with sha256-.
+          # Filter: must contain hyphen AND not start with sha256
           LATEST_TAG=$(aws ecr describe-images \
             --repository-name "${ECR_REPO}" \
             --region "${{ secrets.AWS_REGION }}" \
@@ -130,6 +131,9 @@ jobs:
                 | map(select(.imageTags != null))
                 | map(select(
                     .imageTags[] | test("^sha256") | not
+                  ))
+                | map(select(
+                    .imageTags[] | test("-")
                   ))
                 | sort_by(.imagePushedAt)
                 | last
