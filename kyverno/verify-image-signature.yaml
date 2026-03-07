@@ -8,20 +8,14 @@ metadata:
     policies.kyverno.io/severity: high
     policies.kyverno.io/subject: Pod
     policies.kyverno.io/description: >-
-      Requires all container images to be signed with Cosign keyless signing
-      via the approved GitHub Actions OIDC identity. Images without a valid
-      Sigstore signature are rejected at admission time.
-      Also blocks any image not from the approved ECR registry.
+      Blocks images from unapproved registries and requires Cosign keyless
+      signature from the approved GitHub Actions OIDC identity.
       Phase 3 — Thesis: enforces RQ supply chain integrity claim.
 spec:
   validationFailureAction: Enforce
   background: true
 
   rules:
-    # Rule 1 — Block images from any registry other than the approved ECR.
-    # This is the critical rule for TC-02 and TC-03.
-    # imageReferences in verifyImages only applies rules TO matching images —
-    # it does not block non-matching images. This validate rule does that.
     - name: block-unapproved-registry
       match:
         any:
@@ -29,10 +23,7 @@ spec:
               kinds: [Pod]
               namespaces: ["default", "supply-chain-demo"]
       validate:
-        message: >-
-          Image '{{ element.image }}' is from an unapproved registry.
-          Only images from 812982728774.dkr.ecr.eu-west-1.amazonaws.com
-          are permitted in this cluster.
+        message: "Only images from 812982728774.dkr.ecr.eu-west-1.amazonaws.com are permitted."
         foreach:
           - list: "request.object.spec.containers"
             deny:
@@ -42,18 +33,15 @@ spec:
                     operator: NotMatch
                     value: "812982728774.dkr.ecr.*.amazonaws.com/*"
 
-    # Rule 2 — Verify Cosign signature for approved ECR images.
     - name: check-image-signature
       match:
         any:
           - resources:
               kinds: [Pod]
               namespaces: ["default", "supply-chain-demo"]
-
       verifyImages:
         - imageReferences:
             - "812982728774.dkr.ecr.*.amazonaws.com/*"
-
           attestors:
             - count: 1
               entries:
@@ -62,7 +50,6 @@ spec:
                     issuer: "https://token.actions.githubusercontent.com"
                     rekor:
                       url: https://rekor.sigstore.dev
-
           mutateDigest: true
           verifyDigest: true
           required: true

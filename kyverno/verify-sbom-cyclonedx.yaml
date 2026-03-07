@@ -38,7 +38,7 @@ spec:
                       url: https://rekor.sigstore.dev
 
           attestations:
-            - predicateType: "https://cyclonedx.org/bom"
+            - type: "https://cyclonedx.org/bom"
               attestors:
                 - count: 1
                   entries:
