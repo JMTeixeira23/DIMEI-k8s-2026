@@ -1,0 +1,50 @@
+# helm/kyverno-values.yaml
+# Cloud-agnostic Kyverno configuration.
+# Applied to both EKS (now) and AKS (future) using the same file.
+# The only cloud-specific details are in the ClusterPolicy YAMLs (Phase 3),
+# not here — specifically the registry URL prefix and OIDC issuer subject.
+
+replicaCount: 2
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 256Mi
+
+admissionController:
+  replicas: 2
+
+# Background controller scans existing resources periodically
+backgroundController:
+  enabled: true
+
+# Reports controller writes PolicyReport objects — used in Phase 3 audit mode
+reportsController:
+  enabled: true
+
+cleanupController:
+  enabled: true
+
+# Fail-open: if Kyverno itself crashes, pods are still admitted.
+# Thesis note: discuss fail-open vs fail-closed trade-offs in Chapter 5.
+# Switch to Fail for hardened production deployments.
+failurePolicy: Ignore
+
+# Log level: use debug during Phase 3 policy development, then revert to info
+logLevel: info
+
+# Expose Prometheus metrics — consumed in Phase 4/5 latency measurements.
+# Enable serviceMonitor if Prometheus Operator is installed.
+metricsService:
+  create: true
+  port: 8000
+
+config:
+  webhooks:
+    - name: mutating-webhook-cfg
+      timeoutSeconds: 15
+    - name: validating-webhook-cfg
+      timeoutSeconds: 15
