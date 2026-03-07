@@ -77,8 +77,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Exchange GitHub OIDC token for temporary AWS credentials
-      - name: Configure AWS credentials (OIDC — no stored secrets)
+      # Exchange GitHub OIDC token for temporary AWS credentials — no secrets stored
+      - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
@@ -95,7 +95,7 @@ jobs:
           name: image-tar
           path: /tmp
 
-      - name: Tag and push to ECR
+      - name: Tag, push and capture digest
         env:
           ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
           ECR_REPO: ${{ secrets.ECR_REPO_NAME }}
@@ -104,8 +104,15 @@ jobs:
           docker load --input /tmp/image.tar
           docker tag "${IMAGE_NAME}:${IMAGE_TAG}" "${FULL_IMAGE}"
           docker push "${FULL_IMAGE}"
+
+          # Capture digest so Cosign signs the exact image bytes, not just the tag.
+          # This avoids the ECR immutable tag conflict on re-runs (the .sig tag already
+          # exists for this digest, and immutable repos block overwriting it).
+          DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "${FULL_IMAGE}")
           echo "FULL_IMAGE=${FULL_IMAGE}" >> $GITHUB_ENV
-          echo "✅ Pushed: ${FULL_IMAGE}"
+          echo "IMAGE_DIGEST=${DIGEST}" >> $GITHUB_ENV
+          echo "✅ Pushed : ${FULL_IMAGE}"
+          echo "✅ Digest : ${DIGEST}"
 
       - name: Install Cosign
         uses: sigstore/cosign-installer@v3
@@ -114,10 +121,12 @@ jobs:
 
       # Keyless signing: Cosign obtains a Fulcio certificate for the GitHub
       # Actions OIDC identity. The certificate and signature are recorded in
-      # the Sigstore transparency log (Rekor). No private key is stored.
-      - name: Sign image (Cosign keyless)
+      # the Sigstore transparency log (Rekor). No private key is stored anywhere.
+      # Signing by digest (not tag) is the correct approach — it binds the
+      # signature to the exact image bytes and avoids immutable tag conflicts.
+      - name: Sign image (Cosign keyless, by digest)
         run: |
-          cosign sign --yes "${FULL_IMAGE}"
+          cosign sign --yes "${IMAGE_DIGEST}"
           echo "✅ Image signed"
 
       - name: Verify signature
@@ -125,13 +134,13 @@ jobs:
           cosign verify \
             --certificate-identity-regexp "https://github.com/${{ github.repository }}.*" \
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-            "${FULL_IMAGE}"
+            "${IMAGE_DIGEST}"
           echo "✅ Signature verified"
 
       - name: Show artefacts in registry (cosign tree)
         run: |
           echo "─── cosign tree output (Phase 2 will add SBOM + provenance here) ───"
-          cosign tree "${FULL_IMAGE}"
+          cosign tree "${IMAGE_DIGEST}"
 
       - name: Update kubeconfig for EKS
         run: |
@@ -141,6 +150,7 @@ jobs:
 
       - name: Smoke test — deploy ephemeral pod and confirm execution
         run: |
+          # Use the tag for the pod image reference (EKS pulls by tag from ECR)
           kubectl run smoke-test \
             --image="${FULL_IMAGE}" \
             --restart=Never \
