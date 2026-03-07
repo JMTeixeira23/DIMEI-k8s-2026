@@ -22,9 +22,6 @@ permissions:
 jobs:
   # ───────────────────────────────────────────────────────────────────────────
   # JOB 1 — APPLY POLICIES
-  # Applies all three ClusterPolicies to the EKS cluster.
-  # On first run use Audit mode to confirm signed images pass before blocking.
-  # Switch to Enforce once you have verified the signed image is admitted.
   # ───────────────────────────────────────────────────────────────────────────
   apply-policies:
     name: Apply Kyverno ClusterPolicies
@@ -53,11 +50,21 @@ jobs:
           MODE="${{ github.event.inputs.mode || 'Audit' }}"
           echo "Setting validationFailureAction to: ${MODE}"
 
-          # Patch all policy files with the selected mode
           for f in kyverno/verify-image-signature.yaml \
                    kyverno/verify-slsa-provenance.yaml \
                    kyverno/verify-sbom-cyclonedx.yaml; do
+            # Set the failure action
             sed -i "s/validationFailureAction: .*/validationFailureAction: ${MODE}/" "$f"
+
+            # Kyverno rule: mutateDigest must be false in Audit mode, true in Enforce
+            if [ "${MODE}" = "Audit" ]; then
+              sed -i "s/mutateDigest: .*/mutateDigest: false/" "$f"
+              sed -i "s/verifyDigest: .*/verifyDigest: false/" "$f"
+            else
+              sed -i "s/mutateDigest: .*/mutateDigest: true/" "$f"
+              sed -i "s/verifyDigest: .*/verifyDigest: true/" "$f"
+            fi
+
             echo "  ✅ ${f} → ${MODE}"
           done
 
@@ -69,23 +76,15 @@ jobs:
 
           echo ""
           echo "─── Applied policies ───"
-          kubectl get clusterpolicies
+          kubectl get clusterpolicies -o wide
 
       - name: Wait for policies to be ready
         run: |
-          echo "Waiting for policies to become ready..."
           sleep 10
           kubectl get clusterpolicies -o wide
 
   # ───────────────────────────────────────────────────────────────────────────
   # JOB 2 — TEST MATRIX
-  # Runs the full policy test matrix and records results.
-  # This is the empirical evidence for thesis Chapter 6.
-  #
-  # Test cases:
-  #   TC-01: Signed image with SBOM + provenance     → ADMIT
-  #   TC-02: Unsigned image (nginx from Docker Hub)  → BLOCK
-  #   TC-03: Image from wrong registry               → BLOCK
   # ───────────────────────────────────────────────────────────────────────────
   test-matrix:
     name: Policy Test Matrix
@@ -119,7 +118,6 @@ jobs:
           ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
           ECR_REPO: ${{ secrets.ECR_REPO_NAME }}
         run: |
-          # Get the most recently pushed image tag
           LATEST_TAG=$(aws ecr describe-images \
             --repository-name "${ECR_REPO}" \
             --region "${{ secrets.AWS_REGION }}" \
@@ -135,15 +133,18 @@ jobs:
           kubectl create namespace supply-chain-demo --dry-run=client -o yaml \
             | kubectl apply -f -
 
+      - name: Clean up any leftover test pods
+        run: |
+          kubectl delete pod tc-01 tc-02 tc-03 \
+            -n supply-chain-demo --ignore-not-found
+          sleep 3
+
       - name: "TC-01: Signed image — expect ADMIT"
         run: |
           echo "════════════════════════════════════════"
           echo "TC-01: Signed image with SBOM + provenance"
-          echo "Expected result: ADMITTED"
+          echo "Expected: ADMITTED"
           echo "════════════════════════════════════════"
-
-          kubectl delete pod tc-01 -n supply-chain-demo --ignore-not-found
-          sleep 2
 
           if kubectl run tc-01 \
             --image="${SIGNED_IMAGE}" \
@@ -151,12 +152,12 @@ jobs:
             --namespace=supply-chain-demo \
             --command -- sh -c 'echo TC-01 passed' 2>&1; then
             echo "✅ TC-01 PASS — signed image was ADMITTED as expected"
-            sleep 10
+            sleep 15
             kubectl logs tc-01 -n supply-chain-demo 2>/dev/null || true
             kubectl delete pod tc-01 -n supply-chain-demo --ignore-not-found
           else
             echo "❌ TC-01 FAIL — signed image was unexpectedly BLOCKED"
-            kubectl get clusterpolicies
+            kubectl describe clusterpolicy verify-image-signature
             exit 1
           fi
 
@@ -164,45 +165,56 @@ jobs:
         run: |
           echo "════════════════════════════════════════"
           echo "TC-02: Unsigned image from Docker Hub"
-          echo "Expected result: BLOCKED"
+          echo "Expected: BLOCKED"
           echo "════════════════════════════════════════"
 
-          kubectl delete pod tc-02 -n supply-chain-demo --ignore-not-found
-          sleep 2
-
-          if kubectl run tc-02 \
+          OUTPUT=$(kubectl run tc-02 \
             --image="nginx:latest" \
             --restart=Never \
             --namespace=supply-chain-demo \
-            --command -- sh -c 'echo TC-02' 2>&1 | tee /tmp/tc-02-output.txt; then
-            echo "❌ TC-02 FAIL — unsigned image was admitted (policy not enforcing)"
-            kubectl delete pod tc-02 -n supply-chain-demo --ignore-not-found
-            # Don't exit 1 in Audit mode — just report
-          else
+            --command -- sh -c 'echo TC-02' 2>&1) && ADMITTED=true || ADMITTED=false
+
+          echo "${OUTPUT}"
+
+          if [ "${ADMITTED}" = "false" ]; then
             echo "✅ TC-02 PASS — unsigned image was BLOCKED as expected"
-            cat /tmp/tc-02-output.txt
+          else
+            MODE="${{ github.event.inputs.mode || 'Audit' }}"
+            if [ "${MODE}" = "Audit" ]; then
+              echo "⚠️  TC-02 INFO — Audit mode allows admission but logs violation (expected)"
+              kubectl delete pod tc-02 -n supply-chain-demo --ignore-not-found
+            else
+              echo "❌ TC-02 FAIL — unsigned image was admitted in Enforce mode"
+              exit 1
+            fi
           fi
 
       - name: "TC-03: Wrong registry image — expect BLOCK"
         run: |
           echo "════════════════════════════════════════"
-          echo "TC-03: Image from unrecognised registry"
-          echo "Expected result: BLOCKED"
+          echo "TC-03: Image from unrecognised registry (alpine)"
+          echo "Expected: BLOCKED"
           echo "════════════════════════════════════════"
 
-          kubectl delete pod tc-03 -n supply-chain-demo --ignore-not-found
-          sleep 2
-
-          if kubectl run tc-03 \
+          OUTPUT=$(kubectl run tc-03 \
             --image="alpine:3.19" \
             --restart=Never \
             --namespace=supply-chain-demo \
-            --command -- sh -c 'echo TC-03' 2>&1 | tee /tmp/tc-03-output.txt; then
-            echo "❌ TC-03 FAIL — image from wrong registry was admitted"
-            kubectl delete pod tc-03 -n supply-chain-demo --ignore-not-found
-          else
+            --command -- sh -c 'echo TC-03' 2>&1) && ADMITTED=true || ADMITTED=false
+
+          echo "${OUTPUT}"
+
+          if [ "${ADMITTED}" = "false" ]; then
             echo "✅ TC-03 PASS — image from wrong registry was BLOCKED as expected"
-            cat /tmp/tc-03-output.txt
+          else
+            MODE="${{ github.event.inputs.mode || 'Audit' }}"
+            if [ "${MODE}" = "Audit" ]; then
+              echo "⚠️  TC-03 INFO — Audit mode allows admission but logs violation (expected)"
+              kubectl delete pod tc-03 -n supply-chain-demo --ignore-not-found
+            else
+              echo "❌ TC-03 FAIL — image from wrong registry was admitted in Enforce mode"
+              exit 1
+            fi
           fi
 
       - name: Print policy reports (thesis evidence)
@@ -215,23 +227,28 @@ jobs:
           echo "─── ClusterPolicies ───"
           kubectl get clusterpolicies -o wide
           echo ""
-          echo "─── PolicyReports (supply-chain-demo namespace) ───"
-          kubectl get policyreport -n supply-chain-demo 2>/dev/null || echo "(none yet — run again after TC-01)"
+          echo "─── PolicyReports (supply-chain-demo) ───"
+          kubectl get policyreport -n supply-chain-demo 2>/dev/null \
+            || echo "(none yet)"
           echo ""
-          echo "─── ClusterPolicyReports ───"
-          kubectl get clusterpolicyreport 2>/dev/null || echo "(none yet)"
+          echo "─── Detailed policy report ───"
+          kubectl get policyreport -n supply-chain-demo -o yaml 2>/dev/null \
+            || echo "(none yet)"
 
       - name: Summary
         run: |
+          MODE="${{ github.event.inputs.mode || 'Audit' }}"
           echo ""
           echo "════════════════════════════════════════════════════"
-          echo "  Phase 3 Test Matrix Summary"
+          echo "  Phase 3 Test Matrix — Mode: ${MODE}"
           echo "════════════════════════════════════════════════════"
-          echo "  TC-01  Signed image + SBOM + provenance → ADMIT"
-          echo "  TC-02  Unsigned image (nginx)            → BLOCK"
-          echo "  TC-03  Wrong registry (alpine)           → BLOCK"
+          echo "  TC-01  Signed image + SBOM + provenance  → ADMIT"
+          echo "  TC-02  Unsigned image (nginx:latest)      → BLOCK (Enforce) / LOG (Audit)"
+          echo "  TC-03  Wrong registry (alpine:3.19)       → BLOCK (Enforce) / LOG (Audit)"
           echo ""
-          echo "  Mode: ${{ github.event.inputs.mode || 'Audit' }}"
-          echo ""
-          echo "  Next: re-run with mode=Enforce to switch policies to blocking mode"
+          if [ "${MODE}" = "Audit" ]; then
+            echo "  ℹ️  Running in Audit mode — re-run with mode=Enforce to enable blocking"
+          else
+            echo "  🔒 Running in Enforce mode — non-compliant images are actively blocked"
+          fi
           echo "════════════════════════════════════════════════════"
