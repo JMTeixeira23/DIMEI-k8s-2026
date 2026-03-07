@@ -20,6 +20,8 @@ env:
 jobs:
   # ───────────────────────────────────────────────────────────────────────────
   # JOB 1 — BUILD & PUSH
+  # Uses --metadata-file to capture the digest directly from buildx output.
+  # This is the most reliable method — no secondary inspect/pull needed.
   # ───────────────────────────────────────────────────────────────────────────
   build-and-push:
     name: Build & Push to ECR
@@ -56,42 +58,46 @@ jobs:
         run: |
           FULL_IMAGE="${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG}"
 
-          # Build and push — capture the digest from docker's output directly
+          # --metadata-file captures digest directly from buildx — most reliable method
           docker buildx build \
             --build-arg GIT_SHA="${IMAGE_TAG}" \
             --tag "${FULL_IMAGE}" \
             --push \
             --provenance=false \
-            --output "type=image,push=true" \
+            --metadata-file /tmp/build-metadata.json \
             docker/hello-world
 
-          # Pull the manifest to get the digest reliably
-          docker pull "${FULL_IMAGE}"
-          DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "${FULL_IMAGE}" | cut -d'@' -f2)
+          echo "=== Raw metadata ==="
+          cat /tmp/build-metadata.json
+
+          # Extract digest from metadata
+          DIGEST=$(jq -r '."containerimage.digest"' /tmp/build-metadata.json)
 
           REPO="${ECR_REGISTRY}/${ECR_REPO}"
           IMAGE_REF="${REPO}@${DIGEST}"
 
+          echo "=== Outputs ==="
+          echo "full-image : ${FULL_IMAGE}"
+          echo "digest     : ${DIGEST}"
+          echo "image-ref  : ${IMAGE_REF}"
+
+          # Write to GITHUB_OUTPUT
           echo "full-image=${FULL_IMAGE}" >> $GITHUB_OUTPUT
           echo "digest=${DIGEST}"         >> $GITHUB_OUTPUT
           echo "image-ref=${IMAGE_REF}"   >> $GITHUB_OUTPUT
 
-          echo "✅ Pushed    : ${FULL_IMAGE}"
-          echo "✅ Digest    : ${DIGEST}"
-          echo "✅ Image ref : ${IMAGE_REF}"
-
-      - name: Confirm outputs are set
+      - name: Confirm outputs
         run: |
           echo "full-image : ${{ steps.push.outputs.full-image }}"
           echo "digest     : ${{ steps.push.outputs.digest }}"
           echo "image-ref  : ${{ steps.push.outputs.image-ref }}"
-          # Fail fast if any output is empty
-          test -n "${{ steps.push.outputs.image-ref }}" || (echo "ERROR: image-ref is empty" && exit 1)
+          test -n "${{ steps.push.outputs.image-ref }}" \
+            || (echo "ERROR: image-ref output is empty" && exit 1)
+          test -n "${{ steps.push.outputs.digest }}" \
+            || (echo "ERROR: digest output is empty" && exit 1)
 
   # ───────────────────────────────────────────────────────────────────────────
   # JOB 2 — SIGN
-  # Signs the image digest with Cosign keyless signing.
-  # Certificate issued by Fulcio, entry recorded in Rekor transparency log.
   # ───────────────────────────────────────────────────────────────────────────
   sign:
     name: Sign Image
@@ -116,17 +122,16 @@ jobs:
           cosign-release: v2.2.3
 
       - name: Sign image by digest (keyless)
-        env:
-          IMAGE_REF: ${{ needs.build-and-push.outputs.image-ref }}
         run: |
+          IMAGE_REF="${{ needs.build-and-push.outputs.image-ref }}"
           echo "Signing: ${IMAGE_REF}"
           cosign sign --yes "${IMAGE_REF}"
           echo "✅ Signed"
 
   # ───────────────────────────────────────────────────────────────────────────
   # JOB 3 — SBOM
-  # Generates a CycloneDX JSON SBOM with Syft and attaches it as a signed
-  # Cosign attestation. predicateType=cyclonedx is what Kyverno checks (Phase 3).
+  # Generates CycloneDX JSON with Syft, attaches as signed Cosign attestation.
+  # predicateType=cyclonedx — verified by Kyverno Phase 3 policy.
   # ───────────────────────────────────────────────────────────────────────────
   sbom:
     name: Generate & Attest SBOM
@@ -156,9 +161,8 @@ jobs:
           syft-version: v0.105.1
 
       - name: Generate CycloneDX SBOM
-        env:
-          IMAGE_REF: ${{ needs.build-and-push.outputs.image-ref }}
         run: |
+          IMAGE_REF="${{ needs.build-and-push.outputs.image-ref }}"
           echo "📋 Generating SBOM for: ${IMAGE_REF}"
 
           syft "${IMAGE_REF}" \
@@ -167,25 +171,23 @@ jobs:
           echo "✅ SBOM generated"
           echo "   Spec version : $(jq -r '.specVersion' sbom.cdx.json)"
           echo "   Components   : $(jq '.components | length' sbom.cdx.json)"
-          echo ""
-          echo "─── Packages in image ───"
+          echo "─── Packages ───"
           jq -r '.components[] | "  \(.name) \(.version // "n/a")"' sbom.cdx.json
 
-      - name: Attach SBOM as signed Cosign attestation
-        env:
-          IMAGE_REF: ${{ needs.build-and-push.outputs.image-ref }}
+      - name: Attach SBOM as signed attestation
         run: |
+          IMAGE_REF="${{ needs.build-and-push.outputs.image-ref }}"
           cosign attest --yes \
             --predicate sbom.cdx.json \
             --type cyclonedx \
             "${IMAGE_REF}"
-          echo "✅ SBOM attestation attached (predicateType: cyclonedx)"
+          echo "✅ SBOM attestation attached"
 
   # ───────────────────────────────────────────────────────────────────────────
   # JOB 4 — SLSA PROVENANCE
-  # Generates SLSA v1.0 provenance JSON and attaches it as a signed attestation.
-  # Records: builder identity, source repo, commit SHA, workflow run details.
-  # predicateType=slsaprovenance1 is what Kyverno checks (Phase 3).
+  # Generates SLSA v1.0 provenance JSON, attaches as signed Cosign attestation.
+  # predicateType=slsaprovenance1 — verified by Kyverno Phase 3 policy.
+  # builder.id is the specific workflow URL Kyverno will match against.
   # ───────────────────────────────────────────────────────────────────────────
   provenance:
     name: Generate & Attest SLSA Provenance
@@ -210,69 +212,63 @@ jobs:
           cosign-release: v2.2.3
 
       - name: Generate SLSA v1.0 provenance predicate
-        env:
-          IMAGE_REF:  ${{ needs.build-and-push.outputs.image-ref }}
-          FULL_IMAGE: ${{ needs.build-and-push.outputs.full-image }}
-          DIGEST:     ${{ needs.build-and-push.outputs.image-digest }}
         run: |
           BUILD_TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          FULL_IMAGE="${{ needs.build-and-push.outputs.full-image }}"
 
-          # SLSA v1.0 provenance predicate
-          # builder.id is what Kyverno Phase 3 policy matches against
-          cat > provenance.json << EOF
-          {
-            "buildDefinition": {
-              "buildType": "https://slsa.dev/container-based-build/v0.1",
-              "externalParameters": {
-                "source": {
-                  "uri": "git+https://github.com/${{ github.repository }}@refs/heads/${{ github.ref_name }}",
-                  "digest": { "gitCommit": "${{ github.sha }}" }
+          python3 -c "
+          import json, sys
+          p = {
+            'buildDefinition': {
+              'buildType': 'https://slsa.dev/container-based-build/v0.1',
+              'externalParameters': {
+                'source': {
+                  'uri': 'git+https://github.com/${{ github.repository }}@refs/heads/${{ github.ref_name }}',
+                  'digest': {'gitCommit': '${{ github.sha }}'}
                 },
-                "image": "${FULL_IMAGE}"
+                'image': '${FULL_IMAGE}'
               },
-              "internalParameters": {
-                "githubEventName":    "${{ github.event_name }}",
-                "githubWorkflow":     "${{ github.workflow }}",
-                "githubRunId":        "${{ github.run_id }}",
-                "githubRunAttempt":   "${{ github.run_attempt }}"
+              'internalParameters': {
+                'githubEventName':  '${{ github.event_name }}',
+                'githubWorkflow':   '${{ github.workflow }}',
+                'githubRunId':      '${{ github.run_id }}',
+                'githubRunAttempt': '${{ github.run_attempt }}'
               },
-              "resolvedDependencies": [{
-                "uri": "git+https://github.com/${{ github.repository }}@refs/heads/${{ github.ref_name }}",
-                "digest": { "gitCommit": "${{ github.sha }}" }
+              'resolvedDependencies': [{
+                'uri': 'git+https://github.com/${{ github.repository }}@refs/heads/${{ github.ref_name }}',
+                'digest': {'gitCommit': '${{ github.sha }}'}
               }]
             },
-            "runDetails": {
-              "builder": {
-                "id": "https://github.com/${{ github.repository }}/.github/workflows/phase2-pipeline.yml@refs/heads/${{ github.ref_name }}"
+            'runDetails': {
+              'builder': {
+                'id': 'https://github.com/${{ github.repository }}/.github/workflows/phase2-pipeline.yml@refs/heads/${{ github.ref_name }}'
               },
-              "metadata": {
-                "invocationId": "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}",
-                "startedOn":  "${BUILD_TIMESTAMP}",
-                "finishedOn": "${BUILD_TIMESTAMP}"
+              'metadata': {
+                'invocationId': 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}',
+                'startedOn':  '${BUILD_TIMESTAMP}',
+                'finishedOn': '${BUILD_TIMESTAMP}'
               }
             }
           }
-          EOF
+          print(json.dumps(p, indent=2))
+          " > provenance.json
 
-          echo "✅ Provenance predicate generated"
-          echo "   Builder : https://github.com/${{ github.repository }}/.github/workflows/phase2-pipeline.yml@refs/heads/${{ github.ref_name }}"
+          echo "✅ Provenance generated"
+          echo "   Builder : $(jq -r '.runDetails.builder.id' provenance.json)"
           echo "   Commit  : ${{ github.sha }}"
-          echo "   Run     : ${{ github.run_id }}"
 
-      - name: Attach provenance as signed Cosign attestation
-        env:
-          IMAGE_REF: ${{ needs.build-and-push.outputs.image-ref }}
+      - name: Attach provenance as signed attestation
         run: |
+          IMAGE_REF="${{ needs.build-and-push.outputs.image-ref }}"
           cosign attest --yes \
             --predicate provenance.json \
             --type slsaprovenance1 \
             "${IMAGE_REF}"
-          echo "✅ Provenance attestation attached (predicateType: slsaprovenance1)"
+          echo "✅ Provenance attestation attached"
 
   # ───────────────────────────────────────────────────────────────────────────
-  # JOB 5 — VERIFY ALL ATTESTATIONS
-  # Confirms all 3 artefacts are present and valid.
-  # cosign tree output here is the key Phase 2 thesis evidence.
+  # JOB 5 — VERIFY ALL
+  # Verifies all 3 artefacts. cosign tree output = Phase 2 thesis evidence.
   # ───────────────────────────────────────────────────────────────────────────
   verify-all:
     name: Verify All Attestations
@@ -297,48 +293,40 @@ jobs:
           cosign-release: v2.2.3
 
       - name: Verify signature
-        env:
-          IMAGE_REF: ${{ needs.build-and-push.outputs.image-ref }}
         run: |
           cosign verify \
             --certificate-identity-regexp "https://github.com/${{ github.repository }}.*" \
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-            "${IMAGE_REF}"
+            "${{ needs.build-and-push.outputs.image-ref }}"
           echo "✅ Signature verified"
 
       - name: Verify SBOM attestation
-        env:
-          IMAGE_REF: ${{ needs.build-and-push.outputs.image-ref }}
         run: |
           cosign verify-attestation \
             --certificate-identity-regexp "https://github.com/${{ github.repository }}.*" \
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
             --type cyclonedx \
-            "${IMAGE_REF}" \
+            "${{ needs.build-and-push.outputs.image-ref }}" \
             | jq -r '.payload | @base64d | fromjson |
                 "✅ SBOM verified — predicateType: \(.predicateType)  components: \(.predicate.components | length)"'
 
       - name: Verify provenance attestation
-        env:
-          IMAGE_REF: ${{ needs.build-and-push.outputs.image-ref }}
         run: |
           cosign verify-attestation \
             --certificate-identity-regexp "https://github.com/${{ github.repository }}.*" \
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
             --type slsaprovenance1 \
-            "${IMAGE_REF}" \
+            "${{ needs.build-and-push.outputs.image-ref }}" \
             | jq -r '.payload | @base64d | fromjson |
                 "✅ Provenance verified — builder: \(.predicate.runDetails.builder.id)"'
 
-      - name: Show full artefact tree (Phase 2 thesis evidence)
-        env:
-          IMAGE_REF: ${{ needs.build-and-push.outputs.image-ref }}
+      - name: cosign tree — Phase 2 thesis evidence
         run: |
           echo "══════════════════════════════════════════════════════"
-          echo "  Phase 2 complete — cosign tree"
+          echo "  Phase 2 — cosign tree (save this for thesis Chapter 5)"
           echo "  Expect: 1 signature + 1 SBOM + 1 provenance"
           echo "══════════════════════════════════════════════════════"
-          cosign tree "${IMAGE_REF}"
+          cosign tree "${{ needs.build-and-push.outputs.image-ref }}"
 
   # ───────────────────────────────────────────────────────────────────────────
   # JOB 6 — SMOKE TEST
@@ -367,9 +355,9 @@ jobs:
             --name "${{ secrets.EKS_CLUSTER_NAME }}"
 
       - name: Deploy ephemeral pod and verify
-        env:
-          FULL_IMAGE: ${{ needs.build-and-push.outputs.full-image }}
         run: |
+          FULL_IMAGE="${{ needs.build-and-push.outputs.full-image }}"
+
           kubectl delete pod smoke-test --ignore-not-found
           sleep 3
 
@@ -385,4 +373,4 @@ jobs:
 
           kubectl logs smoke-test
           kubectl delete pod smoke-test --ignore-not-found
-          echo "✅ Phase 2 complete — signed + SBOM + provenance all attested"
+          echo "✅ Phase 2 complete"
