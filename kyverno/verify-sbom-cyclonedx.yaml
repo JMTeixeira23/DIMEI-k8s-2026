@@ -1,24 +1,23 @@
 apiVersion: kyverno.io/v1
 kind: ClusterPolicy
 metadata:
-  name: verify-sbom-cyclonedx
+  name: verify-slsa-provenance
   annotations:
-    policies.kyverno.io/title: Verify CycloneDX SBOM Attestation
+    policies.kyverno.io/title: Verify SLSA Provenance Attestation
     policies.kyverno.io/category: Supply Chain Security
     policies.kyverno.io/severity: high
     policies.kyverno.io/subject: Pod
     policies.kyverno.io/description: >-
-      Requires all container images to have a valid CycloneDX SBOM attestation
-      signed by the approved CI identity. Ensures every deployed image has a
-      documented and verifiable software bill of materials, enabling component
-      visibility and vulnerability tracking.
-      Phase 3 — Thesis: enforces SBOM presence at admission time.
+      Requires all container images to have a valid SLSA provenance attestation
+      signed by the approved CI builder identity. Proves the image was built by
+      the approved pipeline and not by an arbitrary process.
+      Phase 3 — Thesis: enforces SLSA Build Level 2 at admission time.
 spec:
   validationFailureAction: Enforce
   background: true
 
   rules:
-    - name: check-sbom-cyclonedx
+    - name: check-slsa-provenance
       match:
         any:
           - resources:
@@ -38,11 +37,11 @@ spec:
                     rekor:
                       url: https://rekor.sigstore.dev
 
+          # Verify the SLSA provenance attestation is present and signed.
+          # The certificate chain proves it was signed by your GitHub Actions
+          # OIDC identity — no conditions needed, the signature IS the proof.
           attestations:
-            - predicateType: "https://cyclonedx.org/bom"
-              # Verify the SBOM attestation is present and signed.
-              # The condition checks that specVersion is a non-empty string,
-              # confirming a valid CycloneDX document was attached.
+            - predicateType: "https://slsa.dev/provenance/v1"
               attestors:
                 - count: 1
                   entries:
@@ -51,11 +50,6 @@ spec:
                         issuer: "https://token.actions.githubusercontent.com"
                         rekor:
                           url: https://rekor.sigstore.dev
-              conditions:
-                - all:
-                    - key: "{{ predicate.specVersion }}"
-                      operator: NotEquals
-                      value: ""
 
           mutateDigest: true
           verifyDigest: true
