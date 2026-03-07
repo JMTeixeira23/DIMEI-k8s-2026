@@ -57,7 +57,7 @@ spec:
                     # An attacker who creates a forged provenance JSON with a
                     # different builder cannot pass this check because the
                     # certificate chain will not match.
-                    - key: "{{ attestation.statement.predicate.runDetails.builder.id }}"
+                    - key: "{{ predicate.runDetails.builder.id }}"
                       operator: Equals
                       value: "https://github.com/JMTeixeira23/DIMEI-k8s-2026/.github/workflows/phase2-pipeline.yml@refs/heads/main"
 

@@ -53,7 +53,7 @@ spec:
                           url: https://rekor.sigstore.dev
               conditions:
                 - all:
-                    - key: "{{ attestation.statement.predicate.specVersion }}"
+                    - key: "{{ predicate.specVersion }}"
                       operator: NotEquals
                       value: ""
 
