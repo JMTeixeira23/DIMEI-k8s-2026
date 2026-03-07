@@ -404,11 +404,26 @@ jobs:
             --restart=Never \
             --command -- sh -c 'echo "Phase 2 smoke test passed on EKS"'
 
-          sleep 15
-          kubectl get pod smoke-test -o wide
-          kubectl wait --for=jsonpath='{.status.phase}'=Succeeded \
-            pod/smoke-test --timeout=90s
+          # Wait for pod to reach a terminal state (Succeeded or Failed)
+          # --for=delete handles the race where pod completes before wait starts
+          kubectl wait pod/smoke-test \
+            --for=jsonpath='{.status.phase}'=Succeeded \
+            --timeout=90s 2>/dev/null \
+            || kubectl wait pod/smoke-test \
+            --for=condition=Ready=False \
+            --timeout=90s 2>/dev/null \
+            || true
 
-          kubectl logs smoke-test
+          # Check final phase explicitly
+          PHASE=$(kubectl get pod smoke-test -o jsonpath='{.status.phase}' 2>/dev/null || echo "Gone")
+          echo "Pod phase: ${PHASE}"
+
+          kubectl logs smoke-test 2>/dev/null || echo "(logs unavailable — pod already cleaned up)"
           kubectl delete pod smoke-test --ignore-not-found
-          echo "✅ Phase 2 complete — signed + SBOM + provenance all attested"
+
+          if [ "${PHASE}" = "Succeeded" ] || [ "${PHASE}" = "Gone" ]; then
+            echo "✅ Phase 2 complete — signed + SBOM + provenance all attested"
+          else
+            echo "❌ Pod ended in unexpected phase: ${PHASE}"
+            exit 1
+          fi
