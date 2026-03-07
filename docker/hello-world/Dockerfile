@@ -1,26 +1,15 @@
 # docker/hello-world/Dockerfile
-# Multi-stage smoke-test image.
-# Stage 1 compiles a minimal static Go binary.
-# Stage 2 copies it into distroless — no shell, no package manager.
-#
-# Using distroless keeps the Phase 2 SBOM minimal and clean.
-# The nonroot variant enforces least-privilege execution.
+# Simple smoke-test image — no compilation needed.
+# Alpine is sufficient for Phase 1; distroless is used from Phase 2 onwards
+# when the SBOM needs to be minimal and clean.
 
-# ── Build stage ──────────────────────────────────────────────────────────────
-FROM golang:1.22-alpine AS builder
-WORKDIR /src
-COPY main.go .
-# Fully static binary — no libc dependency, works in distroless
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /hello .
-
-# ── Runtime stage ─────────────────────────────────────────────────────────────
-FROM gcr.io/distroless/static-debian12:nonroot
+FROM alpine:3.19
 
 LABEL org.opencontainers.image.title="hello-world"
 LABEL org.opencontainers.image.description="Phase 1 smoke-test image"
-LABEL org.opencontainers.image.source="https://github.com/YOUR_ORG/YOUR_REPO"
+LABEL org.opencontainers.image.source="https://github.com/JMTeixeira23/DIMEI-k8s-2026"
 LABEL org.opencontainers.image.licenses="MIT"
 
-COPY --from=builder /hello /hello
-USER nonroot:nonroot
-ENTRYPOINT ["/hello"]
+RUN echo "Image built successfully" > /hello.txt
+
+CMD ["sh", "-c", "echo '=== Phase 1 smoke test PASSED ===' && echo 'Time:' $(date) && echo 'Host:' $(hostname)"]
