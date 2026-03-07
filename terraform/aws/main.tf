@@ -270,7 +270,7 @@ resource "aws_iam_role_policy" "github_actions_eks_read" {
 
 resource "aws_ecr_repository" "main" {
   name                 = var.ecr_repo_name
-  image_tag_mutability = "IMMUTABLE"
+  image_tag_mutability = "MUTABLE"
 
   image_scanning_configuration {
     scan_on_push = true
