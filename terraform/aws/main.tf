@@ -298,24 +298,6 @@ resource "aws_ecr_lifecycle_policy" "main" {
   })
 }
 
-# ─────────────────────────────────────────────────────────────────────────────
-# KYVERNO — installed via Helm
-# Shared values file is cloud-agnostic; only registry URLs and OIDC issuer
-# strings in the ClusterPolicies (Phase 3) differ between clouds.
-# ─────────────────────────────────────────────────────────────────────────────
-
-resource "helm_release" "kyverno" {
-  name             = "kyverno"
-  repository       = "https://kyverno.github.io/kyverno/"
-  chart            = "kyverno"
-  version          = "3.1.4"
-  namespace        = "kyverno"
-  create_namespace = true
-
-  values = [file("${path.module}/../../helm/kyverno-values.yaml")]
-
-  depends_on = [aws_eks_node_group.main]
-}
 
 # ─────────────────────────────────────────────────────────────────────────────
 # GITHUB ACTIONS OIDC PROVIDER
