@@ -4,7 +4,7 @@
 # The only cloud-specific details are in the ClusterPolicy YAMLs (Phase 3),
 # not here — specifically the registry URL prefix and OIDC issuer subject.
 
-replicaCount: 2
+replicaCount: 1
 
 resources:
   limits:
@@ -15,7 +15,7 @@ resources:
     memory: 256Mi
 
 admissionController:
-  replicas: 2
+  replicas: 1
 
 # Background controller scans existing resources periodically
 backgroundController:
