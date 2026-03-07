@@ -1,0 +1,1227 @@
+{
+  "version": 4,
+  "terraform_version": "1.14.6",
+  "serial": 57,
+  "lineage": "fc714179-d46f-21ae-93b8-9d3d79e0b92b",
+  "outputs": {
+    "aws_account_id": {
+      "value": "812982728774",
+      "type": "string"
+    },
+    "aws_region": {
+      "value": "eu-west-1",
+      "type": "string"
+    },
+    "cluster_endpoint": {
+      "value": "https://6FDF2AE9D5BCBAE20194E33B6BDC3518.gr7.eu-west-1.eks.amazonaws.com",
+      "type": "string"
+    },
+    "cluster_name": {
+      "value": "supply-chain-eks",
+      "type": "string"
+    },
+    "cluster_oidc_issuer_url": {
+      "value": "https://oidc.eks.eu-west-1.amazonaws.com/id/6FDF2AE9D5BCBAE20194E33B6BDC3518",
+      "type": "string"
+    },
+    "ecr_repository_url": {
+      "value": "812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world",
+      "type": "string"
+    },
+    "github_actions_role_arn": {
+      "value": "arn:aws:iam::812982728774:role/supply-chain-eks-github-actions",
+      "type": "string"
+    },
+    "kubeconfig_command": {
+      "value": "aws eks update-kubeconfig --region eu-west-1 --name supply-chain-eks",
+      "type": "string"
+    }
+  },
+  "resources": [
+    {
+      "mode": "data",
+      "type": "aws_caller_identity",
+      "name": "current",
+      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "account_id": "812982728774",
+            "arn": "arn:aws:sts::812982728774:assumed-role/AWSReservedSSO_AWSAdministratorAccess_5e5412873228a7a4/joao.teixeira@convatec.com",
+            "id": "812982728774",
+            "user_id": "AROA32SML7BDBDPYJDYRR:joao.teixeira@convatec.com"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0
+        }
+      ]
+    },
+    {
+      "mode": "data",
+      "type": "tls_certificate",
+      "name": "eks_oidc",
+      "provider": "provider[\"registry.terraform.io/hashicorp/tls\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "certificates": [
+              {
+                "cert_pem": "-----BEGIN CERTIFICATE-----\nMIIEkjCCA3qgAwIBAgITBn+USionzfP6wq4rAfkI7rnExjANBgkqhkiG9w0BAQsF\nADCBmDELMAkGA1UEBhMCVVMxEDAOBgNVBAgTB0FyaXpvbmExEzARBgNVBAcTClNj\nb3R0c2RhbGUxJTAjBgNVBAoTHFN0YXJmaWVsZCBUZWNobm9sb2dpZXMsIEluYy4x\nOzA5BgNVBAMTMlN0YXJmaWVsZCBTZXJ2aWNlcyBSb290IENlcnRpZmljYXRlIEF1\ndGhvcml0eSAtIEcyMB4XDTE1MDUyNTEyMDAwMFoXDTM3MTIzMTAxMDAwMFowOTEL\nMAkGA1UEBhMCVVMxDzANBgNVBAoTBkFtYXpvbjEZMBcGA1UEAxMQQW1hem9uIFJv\nb3QgQ0EgMTCCASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBALJ4gHHKeNXj\nca9HgFB0fW7Y14h29Jlo91ghYPl0hAEvrAIthtOgQ3pOsqTQNroBvo3bSMgHFzZM\n9O6II8c+6zf1tRn4SWiw3te5djgdYZ6k/oI2peVKVuRF4fn9tBb6dNqcmzU5L/qw\nIFAGbHrQgLKm+a/sRxmPUDgH3KKHOVj4utWp+UhnMJbulHheb4mjUcAwhmahRWa6\nVOujw5H5SNz/0egwLX0tdHA114gk957EWW67c4cX8jJGKLhD+rcdqsq08p8kDi1L\n93FcXmn/6pUCyziKrlA4b9v7LWIbxcceVOF34GfID5yHI9Y/QCB/IIDEgEw+OyQm\njgSubJrIqg0CAwEAAaOCATEwggEtMA8GA1UdEwEB/wQFMAMBAf8wDgYDVR0PAQH/\nBAQDAgGGMB0GA1UdDgQWBBSEGMyFNOy8DJSULghZnMeyEE4KCDAfBgNVHSMEGDAW\ngBScXwDfqgHXMCs4iKK4bUqc8hGRgzB4BggrBgEFBQcBAQRsMGowLgYIKwYBBQUH\nMAGGImh0dHA6Ly9vY3NwLnJvb3RnMi5hbWF6b250cnVzdC5jb20wOAYIKwYBBQUH\nMAKGLGh0dHA6Ly9jcnQucm9vdGcyLmFtYXpvbnRydXN0LmNvbS9yb290ZzIuY2Vy\nMD0GA1UdHwQ2MDQwMqAwoC6GLGh0dHA6Ly9jcmwucm9vdGcyLmFtYXpvbnRydXN0\nLmNvbS9yb290ZzIuY3JsMBEGA1UdIAQKMAgwBgYEVR0gADANBgkqhkiG9w0BAQsF\nAAOCAQEAYjdCXLwQtT6LLOkMm2xF4gcAevnFWAu5CIw+7bMlPLVvUOTNNWqnkzSW\nMiGpSESrnO09tKpzbeR/FoCJbM8oAxiDR3mjEH4wW6w7sGDgd9QIpuEdfF7Au/ma\neyKdpwAJfqxGF4PcnCZXmTA5YpaP7dreqsXMGz7KQ2hsVxa81Q4gLv7/wmpdLqBK\nbRRYh5TmOTFffHPLkIhqhBGWJ6bt2YFGpn6jcgAKUj6DiAdjd4lpFw85hdKrCEVN\n0FE6/V1dN2RMfjCyVSRCnTawXZwXgWHxyvkQAiSr6w10kY17RSlQOYiypok1JR4U\nakcjMS9cmvqtmg5iUaQqqcT5NJ0hGA==\n-----END CERTIFICATE-----\n",
+                "is_ca": true,
+                "issuer": "CN=Starfield Services Root Certificate Authority - G2,O=Starfield Technologies\\, Inc.,L=Scottsdale,ST=Arizona,C=US",
+                "max_path_length": -1,
+                "not_after": "2037-12-31T01:00:00Z",
+                "not_before": "2015-05-25T12:00:00Z",
+                "public_key_algorithm": "RSA",
+                "serial_number": "144918191876577076464031512351042010504348870",
+                "sha1_fingerprint": "06b25927c42a721631c1efd9431e648fa62e1e39",
+                "signature_algorithm": "SHA256-RSA",
+                "subject": "CN=Amazon Root CA 1,O=Amazon,C=US",
+                "version": 3
+              },
+              {
+                "cert_pem": "-----BEGIN CERTIFICATE-----\nMIIEXjCCA0agAwIBAgITB3MSOAudZoijOx7Zv5zNpo4ODzANBgkqhkiG9w0BAQsF\nADA5MQswCQYDVQQGEwJVUzEPMA0GA1UEChMGQW1hem9uMRkwFwYDVQQDExBBbWF6\nb24gUm9vdCBDQSAxMB4XDTIyMDgyMzIyMjEyOFoXDTMwMDgyMzIyMjEyOFowPDEL\nMAkGA1UEBhMCVVMxDzANBgNVBAoTBkFtYXpvbjEcMBoGA1UEAxMTQW1hem9uIFJT\nQSAyMDQ4IE0wMTCCASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBAOtxLKnL\nH4gokjIwr4pXD3i3NyWVVYesZ1yX0yLI2qIUZ2t88Gfa4gMqs1YSXca1R/lnCKeT\nepWSGA+0+fkQNpp/L4C2T7oTTsddUx7g3ZYzByDTlrwS5HRQQqEFE3O1T5tEJP4t\nf+28IoXsNiEzl3UGzicYgtzj2cWCB41eJgEmJmcf2T8TzzK6a614ZPyq/w4CPAff\nnAV4coz96nW3AyiE2uhuB4zQUIXvgVSycW7sbWLvj5TDXunEpNCRwC4kkZjK7rol\njtT2cbb7W2s4Bkg3R42G3PLqBvt2N32e/0JOTViCk8/iccJ4sXqrS1uUN4iB5Nmv\nJK74csVl+0u0UecCAwEAAaOCAVowggFWMBIGA1UdEwEB/wQIMAYBAf8CAQAwDgYD\nVR0PAQH/BAQDAgGGMB0GA1UdJQQWMBQGCCsGAQUFBwMBBggrBgEFBQcDAjAdBgNV\nHQ4EFgQUgbgOY4qJEhjl+js7UJWf5uWQE4UwHwYDVR0jBBgwFoAUhBjMhTTsvAyU\nlC4IWZzHshBOCggwewYIKwYBBQUHAQEEbzBtMC8GCCsGAQUFBzABhiNodHRwOi8v\nb2NzcC5yb290Y2ExLmFtYXpvbnRydXN0LmNvbTA6BggrBgEFBQcwAoYuaHR0cDov\nL2NydC5yb290Y2ExLmFtYXpvbnRydXN0LmNvbS9yb290Y2ExLmNlcjA/BgNVHR8E\nODA2MDSgMqAwhi5odHRwOi8vY3JsLnJvb3RjYTEuYW1hem9udHJ1c3QuY29tL3Jv\nb3RjYTEuY3JsMBMGA1UdIAQMMAowCAYGZ4EMAQIBMA0GCSqGSIb3DQEBCwUAA4IB\nAQCtAN4CBSMuBjJitGuxlBbkEUDeK/pZwTXv4KqPK0G50fOHOQAd8j21p0cMBgbG\nkfMHVwLU7b0XwZCav0h1ogdPMN1KakK1DT0VwA/+hFvGPJnMV1Kx2G4S1ZaSk0uU\n5QfoiYIIano01J5k4T2HapKQmmOhS/iPtuo00wW+IMLeBuKMn3OLn005hcrOGTad\nhcmeyfhQP7Z+iKHvyoQGi1C0ClymHETx/chhQGDyYSWqB/THwnN15AwLQo0E5V9E\nSJlbe4mBlqeInUsNYugExNf+tOiybcrswBy8OFsd34XOW3rjSUtsuafd9AWySa3h\nxRRrwszrzX/WWGm6wyB+f7C4\n-----END CERTIFICATE-----\n",
+                "is_ca": true,
+                "issuer": "CN=Amazon Root CA 1,O=Amazon,C=US",
+                "max_path_length": 0,
+                "not_after": "2030-08-23T22:21:28Z",
+                "not_before": "2022-08-23T22:21:28Z",
+                "public_key_algorithm": "RSA",
+                "serial_number": "166129328851546858514271303855646110030630415",
+                "sha1_fingerprint": "2ad974a775f73cbdbbd8f5ac3a49255fa8fb1f8c",
+                "signature_algorithm": "SHA256-RSA",
+                "subject": "CN=Amazon RSA 2048 M01,O=Amazon,C=US",
+                "version": 3
+              },
+              {
+                "cert_pem": "-----BEGIN CERTIFICATE-----\nMIIF3TCCBMWgAwIBAgIQA1jCPSDm8X/VUa7jjbhCPTANBgkqhkiG9w0BAQsFADA8\nMQswCQYDVQQGEwJVUzEPMA0GA1UEChMGQW1hem9uMRwwGgYDVQQDExNBbWF6b24g\nUlNBIDIwNDggTTAxMB4XDTI2MDEyODAwMDAwMFoXDTI3MDIyNjIzNTk1OVowKDEm\nMCQGA1UEAwwdKi5la3MuZXUtd2VzdC0xLmFtYXpvbmF3cy5jb20wggEiMA0GCSqG\nSIb3DQEBAQUAA4IBDwAwggEKAoIBAQC7C7raBBSoWs27ecLuw2fOy5rGH2DxHlE/\ntguRCzrbL6KwIqfXYXy8fTDuh7SFoSqyHesAw7LMkVkr5dbiJQRDQam1XWdODoFT\n4D5FDQrZ0T20wXDp0n/JkceHMRT6OYRZ0JOw+2FXlqeNmYqzdS2r4iWiRe+Bt+8p\nP+MTImvSMh3Kcr8pMTaeDZPOyRHvkPtx7F6mhQ92ODw4HHGi5gtxhn4544iMjjWU\nPIluJEA/9tDRIwGqozc40yMdGHdHJrRwG7bb0fM3ELmNA4ITP0rF1xi6YU/X6paY\nE0XXx5PKwI6IOW483t/inqOe2gQeMB1NyrYsYktBGhI6m6m0KEI5AgMBAAGjggLt\nMIIC6TAfBgNVHSMEGDAWgBSBuA5jiokSGOX6OztQlZ/m5ZAThTAdBgNVHQ4EFgQU\neR70bkgIqRENugAhEckY/ob8v1wwKAYDVR0RBCEwH4IdKi5la3MuZXUtd2VzdC0x\nLmFtYXpvbmF3cy5jb20wEwYDVR0gBAwwCjAIBgZngQwBAgEwDgYDVR0PAQH/BAQD\nAgWgMBMGA1UdJQQMMAoGCCsGAQUFBwMBMDsGA1UdHwQ0MDIwMKAuoCyGKmh0dHA6\nLy9jcmwucjJtMDEuYW1hem9udHJ1c3QuY29tL3IybTAxLmNybDB1BggrBgEFBQcB\nAQRpMGcwLQYIKwYBBQUHMAGGIWh0dHA6Ly9vY3NwLnIybTAxLmFtYXpvbnRydXN0\nLmNvbTA2BggrBgEFBQcwAoYqaHR0cDovL2NydC5yMm0wMS5hbWF6b250cnVzdC5j\nb20vcjJtMDEuY2VyMAwGA1UdEwEB/wQCMAAwggF/BgorBgEEAdZ5AgQCBIIBbwSC\nAWsBaQB3AExj3JjlnB2riPYeij3ero+rRKM3e1+blMP7oZz8wb4mAAABnAIEw10A\nAAQDAEgwRgIhAL8Xy7eLv+88XfYMuoiydiWQNNPfr1AQ4/OXTzw4F1gUAiEAtLWE\n4rtQ4/zTVI5oPCSlxtX4vDBkQ2gy6+jc+0bzXDkAdQAcn2gs6frwRWlQ+BuWiofd\n2zIQ2EzmyLLjglJKxM9ZnwAAAZwCBMNZAAAEAwBGMEQCIHUJDGKsaxnLHrcHEkgN\nJlikmlm0j5ChoXs9UdcesBYpAiAChKCAaNev0QsCqr+EGDOFks8VsyTAC0VF8/2K\nHvif5QB3AGBMmq96f3dfAdQG/JINyJnrCxx9+MlSG/r6F3c7l4vJAAABnAIExG0A\nAAQDAEgwRgIhAN5C7ItzDkXwnXtCq06tkslXIppjSeN7GOlTDlliMtlSAiEA4HGa\nH6Yq8zOHJUAbH9xCoJS8dBo89ZFz+ycQFtLKzs0wDQYJKoZIhvcNAQELBQADggEB\nABQ1TKQyszMd6LC/y60v0dBu5KAaCSY/RhMrtAFFFLcuN3R74OZ63CoF+Rlhs01Z\n4bwvcSTzjPk/MC3SvoKUgpbMQr/sF1UMZik9cTMz1UEtgVAg5ntyvbXBdb3WpSk3\ncQYQWy0Rhj96I52Qi2DdlWutlEs/e7D2xMOoInii9pek1eEDwaUeaxed95BNME4l\nW/begop8DjCxXdJWoo8wAt6+C1JwifOtgKnonLynXptrhcvdxPY6tva117vgjWFG\njUHkMCGSlPKGi1JDR9EtHB6VjksMW/OvMkd93nyHohPQsnBqBM7WnFs/3fsceMTZ\nY8pUH01hh9BJcF+60ZeR+1k=\n-----END CERTIFICATE-----\n",
+                "is_ca": false,
+                "issuer": "CN=Amazon RSA 2048 M01,O=Amazon,C=US",
+                "max_path_length": -1,
+                "not_after": "2027-02-26T23:59:59Z",
+                "not_before": "2026-01-28T00:00:00Z",
+                "public_key_algorithm": "RSA",
+                "serial_number": "4448545741469547945433478981278515773",
+                "sha1_fingerprint": "8de95dee5dfc5266e4ffe1626e2105e1acc61c78",
+                "signature_algorithm": "SHA256-RSA",
+                "subject": "CN=*.eks.eu-west-1.amazonaws.com",
+                "version": 3
+              }
+            ],
+            "content": null,
+            "id": "13102e0a8585014b9cde9ab0c4895b6972be2a09",
+            "url": "https://oidc.eks.eu-west-1.amazonaws.com/id/6FDF2AE9D5BCBAE20194E33B6BDC3518",
+            "verify_chain": true
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "aws_ecr_lifecycle_policy",
+      "name": "main",
+      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "id": "supply-chain/hello-world",
+            "policy": "{\"rules\":[{\"action\":{\"type\":\"expire\"},\"description\":\"Retain last 30 images — prevents unbounded registry growth during thesis\",\"rulePriority\":1,\"selection\":{\"countNumber\":30,\"countType\":\"imageCountMoreThan\",\"tagStatus\":\"any\"}}]}",
+            "registry_id": "812982728774",
+            "repository": "supply-chain/hello-world"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "bnVsbA==",
+          "dependencies": [
+            "aws_ecr_repository.main"
+          ]
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "aws_ecr_repository",
+      "name": "main",
+      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "arn": "arn:aws:ecr:eu-west-1:812982728774:repository/supply-chain/hello-world",
+            "encryption_configuration": [
+              {
+                "encryption_type": "AES256",
+                "kms_key": ""
+              }
+            ],
+            "force_delete": null,
+            "id": "supply-chain/hello-world",
+            "image_scanning_configuration": [
+              {
+                "scan_on_push": true
+              }
+            ],
+            "image_tag_mutability": "MUTABLE",
+            "name": "supply-chain/hello-world",
+            "registry_id": "812982728774",
+            "repository_url": "812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world",
+            "tags": {},
+            "tags_all": {
+              "Environment": "thesis-dev",
+              "ManagedBy": "terraform",
+              "Phase": "1",
+              "Project": "supply-chain-security"
+            },
+            "timeouts": null
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiZGVsZXRlIjoxMjAwMDAwMDAwMDAwfX0="
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "aws_eks_access_entry",
+      "name": "github_actions",
+      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "access_entry_arn": "arn:aws:eks:eu-west-1:812982728774:access-entry/supply-chain-eks/role/812982728774/supply-chain-eks-github-actions/86ce6414-3b8a-3045-5738-c7d9c1aa9862",
+            "cluster_name": "supply-chain-eks",
+            "created_at": "2026-03-07T11:57:01Z",
+            "id": "supply-chain-eks:arn:aws:iam::812982728774:role/supply-chain-eks-github-actions",
+            "kubernetes_groups": [],
+            "modified_at": "2026-03-07T11:57:01Z",
+            "principal_arn": "arn:aws:iam::812982728774:role/supply-chain-eks-github-actions",
+            "tags": {},
+            "tags_all": {
+              "Environment": "thesis-dev",
+              "ManagedBy": "terraform",
+              "Phase": "1",
+              "Project": "supply-chain-security"
+            },
+            "timeouts": null,
+            "type": "STANDARD",
+            "user_name": "arn:aws:sts::812982728774:assumed-role/supply-chain-eks-github-actions/{{SessionName}}"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjo2MDAwMDAwMDAwMDAsImRlbGV0ZSI6NjAwMDAwMDAwMDAwfX0=",
+          "dependencies": [
+            "aws_eks_cluster.main",
+            "aws_iam_role.eks_cluster",
+            "aws_iam_role.github_actions",
+            "aws_iam_role_policy_attachment.eks_cluster_policy",
+            "aws_subnet.public",
+            "aws_vpc.main",
+            "data.aws_caller_identity.current"
+          ]
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "aws_eks_access_policy_association",
+      "name": "github_actions_admin",
+      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "access_scope": [
+              {
+                "namespaces": [],
+                "type": "cluster"
+              }
+            ],
+            "associated_at": "2026-03-07 11:57:01.888 +0000 UTC",
+            "cluster_name": "supply-chain-eks",
+            "id": "supply-chain-eks#arn:aws:iam::812982728774:role/supply-chain-eks-github-actions#arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy",
+            "modified_at": "2026-03-07 11:57:01.888 +0000 UTC",
+            "policy_arn": "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy",
+            "principal_arn": "arn:aws:iam::812982728774:role/supply-chain-eks-github-actions",
+            "timeouts": null
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjo2MDAwMDAwMDAwMDAsImRlbGV0ZSI6NjAwMDAwMDAwMDAwfX0=",
+          "dependencies": [
+            "aws_eks_access_entry.github_actions",
+            "aws_eks_cluster.main",
+            "aws_iam_role.eks_cluster",
+            "aws_iam_role.github_actions",
+            "aws_iam_role_policy_attachment.eks_cluster_policy",
+            "aws_subnet.public",
+            "aws_vpc.main",
+            "data.aws_caller_identity.current"
+          ]
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "aws_eks_cluster",
+      "name": "main",
+      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
+      "instances": [
+        {
+          "schema_version": 1,
+          "attributes": {
+            "access_config": [
+              {
+                "authentication_mode": "API_AND_CONFIG_MAP",
+                "bootstrap_cluster_creator_admin_permissions": true
+              }
+            ],
+            "arn": "arn:aws:eks:eu-west-1:812982728774:cluster/supply-chain-eks",
+            "bootstrap_self_managed_addons": true,
+            "certificate_authority": [
+              {
+                "data": "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURCVENDQWUyZ0F3SUJBZ0lJSndiTTF1RktvbHd3RFFZSktvWklodmNOQVFFTEJRQXdGVEVUTUJFR0ExVUUKQXhNS2EzVmlaWEp1WlhSbGN6QWVGdzB5TmpBek1EY3hNRFE0TWpkYUZ3MHpOakF6TURReE1EVXpNamRhTUJVeApFekFSQmdOVkJBTVRDbXQxWW1WeWJtVjBaWE13Z2dFaU1BMEdDU3FHU0liM0RRRUJBUVVBQTRJQkR3QXdnZ0VLCkFvSUJBUUM3R3B2amdxbW00ejVWR3l5V2p1azBQdERRS2ZMbytUdnBYTjVpNTE3OXhjckR6NC9KUjVCOGhpYzIKQ0JDUW53Wm13U2hBekxJNDMzaENJRXJ2b1FraU1NNG55R2VKdUgxbjBMbjJYRm5BSDEweFJTWVhSclVlV2xoagoyYllNVzJWT1l1YWxJand5a01NbTliUkFnR3VZVk4vYUx6aTJ5SGdmbHNMdGlUK3M1VmkzcDRldU1xMWpSZkhFCjNsNE1FcVRKbWQ0a1g1MlFNYVdJbHRDQ205dmg0K2l6bUZtSkJqTkVUY2ZXWUxrWC9yTFRtM1oraUhpK1QyNkgKOUNyV1JFeHAwK1pGajVOeTRodk5nb21tWWpwQjB0ajF6bmQyQk4rZlczN1JQZTFDNzJPVk5FeXNBQ0lMeHdBSwo3cklJYU9rOTF2cEk5R1FKUm1Ia2RwN2JkUnRqQWdNQkFBR2pXVEJYTUE0R0ExVWREd0VCL3dRRUF3SUNwREFQCkJnTlZIUk1CQWY4RUJUQURBUUgvTUIwR0ExVWREZ1FXQkJRRHVmWDNsYVFUd0k4SFMwQkVvTXR4RzVOdEZEQVYKQmdOVkhSRUVEakFNZ2dwcmRXSmxjbTVsZEdWek1BMEdDU3FHU0liM0RRRUJDd1VBQTRJQkFRQUNleDdjeDgrdwp3cjltcXJVcy9KY1hPZzJHYkFCU0tJVzFQYzNuMzFrMVBKajFaRlMwblBMZFR3QXljTTFjMTI2SFl4clZnZ0xjCkVJY1dmaEtCcTBpemM1d2k2THBkUndQNFhHRVRMb2FnN1Zzc21CYmxHdHltKzlFSmcxNGRDMXJJNGtnN0didmYKWjRZNU80Z2hXWGFRVkhGcVppZXlQQ0ljUEZiWS9sMGpXVjBCc3RIaWJZdG84ZWdCa2JZc2ZSbEJpdis3WGxVTQptZTVXZEZBY3NtWHVMSjJJNVF0U0hUaWVYc1NKNlNFZEh4L1BpVkJOdU5hVlNXSnYxTHZHbnZzcWM5aXdYU2l5CjVzeTFwVzVGcExMTWlPbmtGODdKa01mNWEwR3FmUGRGaHB4eDlkNnZxNTNzNWt4K1hRWDY1Nk5OV3IxQVhocHMKbTNzNU1mdVVodnpPCi0tLS0tRU5EIENFUlRJRklDQVRFLS0tLS0K"
+              }
+            ],
+            "cluster_id": null,
+            "compute_config": [],
+            "created_at": "2026-03-07T10:49:17Z",
+            "enabled_cluster_log_types": [
+              "api",
+              "audit",
+              "authenticator"
+            ],
+            "encryption_config": [],
+            "endpoint": "https://6FDF2AE9D5BCBAE20194E33B6BDC3518.gr7.eu-west-1.eks.amazonaws.com",
+            "force_update_version": null,
+            "id": "supply-chain-eks",
+            "identity": [
+              {
+                "oidc": [
+                  {
+                    "issuer": "https://oidc.eks.eu-west-1.amazonaws.com/id/6FDF2AE9D5BCBAE20194E33B6BDC3518"
+                  }
+                ]
+              }
+            ],
+            "kubernetes_network_config": [
+              {
+                "elastic_load_balancing": [
+                  {
+                    "enabled": false
+                  }
+                ],
+                "ip_family": "ipv4",
+                "service_ipv4_cidr": "172.20.0.0/16",
+                "service_ipv6_cidr": ""
+              }
+            ],
+            "name": "supply-chain-eks",
+            "outpost_config": [],
+            "platform_version": "eks.15",
+            "remote_network_config": [],
+            "role_arn": "arn:aws:iam::812982728774:role/supply-chain-eks-cluster-role",
+            "status": "ACTIVE",
+            "storage_config": [],
+            "tags": {},
+            "tags_all": {
+              "Environment": "thesis-dev",
+              "ManagedBy": "terraform",
+              "Phase": "1",
+              "Project": "supply-chain-security"
+            },
+            "timeouts": null,
+            "upgrade_policy": [
+              {
+                "support_type": "EXTENDED"
+              }
+            ],
+            "version": "1.34",
+            "vpc_config": [
+              {
+                "cluster_security_group_id": "sg-087b8fab0d7039ba5",
+                "endpoint_private_access": false,
+                "endpoint_public_access": true,
+                "public_access_cidrs": [
+                  "0.0.0.0/0"
+                ],
+                "security_group_ids": [],
+                "subnet_ids": [
+                  "subnet-011c1957925ac3d07",
+                  "subnet-05949642ede7f875f"
+                ],
+                "vpc_id": "vpc-0ce0c5ac2962013ea"
+              }
+            ],
+            "zonal_shift_config": []
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjoxODAwMDAwMDAwMDAwLCJkZWxldGUiOjkwMDAwMDAwMDAwMCwidXBkYXRlIjozNjAwMDAwMDAwMDAwfSwic2NoZW1hX3ZlcnNpb24iOiIxIn0=",
+          "dependencies": [
+            "aws_iam_role.eks_cluster",
+            "aws_iam_role_policy_attachment.eks_cluster_policy",
+            "aws_subnet.public",
+            "aws_vpc.main"
+          ]
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "aws_eks_node_group",
+      "name": "main",
+      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "ami_type": "AL2023_x86_64_STANDARD",
+            "arn": "arn:aws:eks:eu-west-1:812982728774:nodegroup/supply-chain-eks/supply-chain-eks-ng/2cce6414-3b8e-3792-5111-3ec9f17d5874",
+            "capacity_type": "ON_DEMAND",
+            "cluster_name": "supply-chain-eks",
+            "disk_size": 20,
+            "force_update_version": null,
+            "id": "supply-chain-eks:supply-chain-eks-ng",
+            "instance_types": [
+              "t3.medium"
+            ],
+            "labels": {},
+            "launch_template": [],
+            "node_group_name": "supply-chain-eks-ng",
+            "node_group_name_prefix": "",
+            "node_repair_config": [],
+            "node_role_arn": "arn:aws:iam::812982728774:role/supply-chain-eks-node-role",
+            "release_version": "1.34.4-20260304",
+            "remote_access": [],
+            "resources": [
+              {
+                "autoscaling_groups": [
+                  {
+                    "name": "eks-supply-chain-eks-ng-2cce6414-3b8e-3792-5111-3ec9f17d5874"
+                  }
+                ],
+                "remote_access_security_group_id": ""
+              }
+            ],
+            "scaling_config": [
+              {
+                "desired_size": 2,
+                "max_size": 3,
+                "min_size": 1
+              }
+            ],
+            "status": "ACTIVE",
+            "subnet_ids": [
+              "subnet-011c1957925ac3d07",
+              "subnet-05949642ede7f875f"
+            ],
+            "tags": {},
+            "tags_all": {
+              "Environment": "thesis-dev",
+              "ManagedBy": "terraform",
+              "Phase": "1",
+              "Project": "supply-chain-security"
+            },
+            "taint": [],
+            "timeouts": null,
+            "update_config": [
+              {
+                "max_unavailable": 1,
+                "max_unavailable_percentage": 0
+              }
+            ],
+            "version": "1.34"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjozNjAwMDAwMDAwMDAwLCJkZWxldGUiOjM2MDAwMDAwMDAwMDAsInVwZGF0ZSI6MzYwMDAwMDAwMDAwMH19",
+          "dependencies": [
+            "aws_eks_cluster.main",
+            "aws_iam_role.eks_cluster",
+            "aws_iam_role.eks_nodes",
+            "aws_iam_role_policy_attachment.cni",
+            "aws_iam_role_policy_attachment.ecr_read",
+            "aws_iam_role_policy_attachment.eks_cluster_policy",
+            "aws_iam_role_policy_attachment.worker_node",
+            "aws_subnet.public",
+            "aws_vpc.main"
+          ]
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "aws_iam_openid_connect_provider",
+      "name": "eks",
+      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "arn": "arn:aws:iam::812982728774:oidc-provider/oidc.eks.eu-west-1.amazonaws.com/id/6FDF2AE9D5BCBAE20194E33B6BDC3518",
+            "client_id_list": [
+              "sts.amazonaws.com"
+            ],
+            "id": "arn:aws:iam::812982728774:oidc-provider/oidc.eks.eu-west-1.amazonaws.com/id/6FDF2AE9D5BCBAE20194E33B6BDC3518",
+            "tags": {
+              "Name": "supply-chain-eks-oidc"
+            },
+            "tags_all": {
+              "Environment": "thesis-dev",
+              "ManagedBy": "terraform",
+              "Name": "supply-chain-eks-oidc",
+              "Phase": "1",
+              "Project": "supply-chain-security"
+            },
+            "thumbprint_list": [
+              "06b25927c42a721631c1efd9431e648fa62e1e39"
+            ],
+            "url": "oidc.eks.eu-west-1.amazonaws.com/id/6FDF2AE9D5BCBAE20194E33B6BDC3518"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "bnVsbA==",
+          "dependencies": [
+            "aws_eks_cluster.main",
+            "aws_iam_role.eks_cluster",
+            "aws_iam_role_policy_attachment.eks_cluster_policy",
+            "aws_subnet.public",
+            "aws_vpc.main",
+            "data.tls_certificate.eks_oidc"
+          ]
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "aws_iam_openid_connect_provider",
+      "name": "github_actions",
+      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "arn": "arn:aws:iam::812982728774:oidc-provider/token.actions.githubusercontent.com",
+            "client_id_list": [
+              "sts.amazonaws.com"
+            ],
+            "id": "arn:aws:iam::812982728774:oidc-provider/token.actions.githubusercontent.com",
+            "tags": {
+              "Name": "github-actions-oidc"
+            },
+            "tags_all": {
+              "Environment": "thesis-dev",
+              "ManagedBy": "terraform",
+              "Name": "github-actions-oidc",
+              "Phase": "1",
+              "Project": "supply-chain-security"
+            },
+            "thumbprint_list": [
+              "6938fd4d98bab03faadb97b34396831e3780aea1"
+            ],
+            "url": "token.actions.githubusercontent.com"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "bnVsbA=="
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "aws_iam_role",
+      "name": "eks_cluster",
+      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "arn": "arn:aws:iam::812982728774:role/supply-chain-eks-cluster-role",
+            "assume_role_policy": "{\"Statement\":[{\"Action\":\"sts:AssumeRole\",\"Effect\":\"Allow\",\"Principal\":{\"Service\":\"eks.amazonaws.com\"}}],\"Version\":\"2012-10-17\"}",
+            "create_date": "2026-03-07T10:48:54Z",
+            "description": "",
+            "force_detach_policies": false,
+            "id": "supply-chain-eks-cluster-role",
+            "inline_policy": [],
+            "managed_policy_arns": [
+              "arn:aws:iam::aws:policy/AmazonEKSClusterPolicy"
+            ],
+            "max_session_duration": 3600,
+            "name": "supply-chain-eks-cluster-role",
+            "name_prefix": "",
+            "path": "/",
+            "permissions_boundary": "",
+            "tags": {},
+            "tags_all": {
+              "Environment": "thesis-dev",
+              "ManagedBy": "terraform",
+              "Phase": "1",
+              "Project": "supply-chain-security"
+            },
+            "unique_id": "AROA32SML7BDKLOGKMQIZ"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "bnVsbA=="
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "aws_iam_role",
+      "name": "eks_nodes",
+      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "arn": "arn:aws:iam::812982728774:role/supply-chain-eks-node-role",
+            "assume_role_policy": "{\"Statement\":[{\"Action\":\"sts:AssumeRole\",\"Effect\":\"Allow\",\"Principal\":{\"Service\":\"ec2.amazonaws.com\"}}],\"Version\":\"2012-10-17\"}",
+            "create_date": "2026-03-07T10:48:54Z",
+            "description": "",
+            "force_detach_policies": false,
+            "id": "supply-chain-eks-node-role",
+            "inline_policy": [],
+            "managed_policy_arns": [
+              "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly",
+              "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy",
+              "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy"
+            ],
+            "max_session_duration": 3600,
+            "name": "supply-chain-eks-node-role",
+            "name_prefix": "",
+            "path": "/",
+            "permissions_boundary": "",
+            "tags": {},
+            "tags_all": {
+              "Environment": "thesis-dev",
+              "ManagedBy": "terraform",
+              "Phase": "1",
+              "Project": "supply-chain-security"
+            },
+            "unique_id": "AROA32SML7BDC7W46C23T"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "bnVsbA=="
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "aws_iam_role",
+      "name": "github_actions",
+      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "arn": "arn:aws:iam::812982728774:role/supply-chain-eks-github-actions",
+            "assume_role_policy": "{\"Statement\":[{\"Action\":\"sts:AssumeRoleWithWebIdentity\",\"Condition\":{\"StringEquals\":{\"token.actions.githubusercontent.com:aud\":\"sts.amazonaws.com\"},\"StringLike\":{\"token.actions.githubusercontent.com:sub\":\"repo:JMTeixeira23/DIMEI-k8s-2026:*\"}},\"Effect\":\"Allow\",\"Principal\":{\"Federated\":\"arn:aws:iam::812982728774:oidc-provider/token.actions.githubusercontent.com\"}}],\"Version\":\"2012-10-17\"}",
+            "create_date": "2026-03-07T10:48:54Z",
+            "description": "",
+            "force_detach_policies": false,
+            "id": "supply-chain-eks-github-actions",
+            "inline_policy": [
+              {
+                "name": "ecr-push",
+                "policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Action\":[\"ecr:GetAuthorizationToken\"],\"Effect\":\"Allow\",\"Resource\":\"*\"},{\"Action\":[\"ecr:BatchCheckLayerAvailability\",\"ecr:CompleteLayerUpload\",\"ecr:InitiateLayerUpload\",\"ecr:PutImage\",\"ecr:UploadLayerPart\",\"ecr:BatchGetImage\",\"ecr:GetDownloadUrlForLayer\",\"ecr:DescribeImages\",\"ecr:DescribeRepositories\",\"ecr:ListImages\",\"ecr:PutImageTagMutability\"],\"Effect\":\"Allow\",\"Resource\":\"arn:aws:ecr:eu-west-1:812982728774:repository/supply-chain/hello-world\"}]}"
+              },
+              {
+                "name": "eks-describe",
+                "policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Action\":[\"eks:DescribeCluster\"],\"Effect\":\"Allow\",\"Resource\":\"arn:aws:eks:eu-west-1:812982728774:cluster/supply-chain-eks\"}]}"
+              }
+            ],
+            "managed_policy_arns": [],
+            "max_session_duration": 3600,
+            "name": "supply-chain-eks-github-actions",
+            "name_prefix": "",
+            "path": "/",
+            "permissions_boundary": "",
+            "tags": {},
+            "tags_all": {
+              "Environment": "thesis-dev",
+              "ManagedBy": "terraform",
+              "Phase": "1",
+              "Project": "supply-chain-security"
+            },
+            "unique_id": "AROA32SML7BDEUC2MVIKL"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "bnVsbA==",
+          "dependencies": [
+            "data.aws_caller_identity.current"
+          ]
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "aws_iam_role_policy",
+      "name": "github_actions_ecr",
+      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "id": "supply-chain-eks-github-actions:ecr-push",
+            "name": "ecr-push",
+            "name_prefix": "",
+            "policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Action\":[\"ecr:GetAuthorizationToken\"],\"Effect\":\"Allow\",\"Resource\":\"*\"},{\"Action\":[\"ecr:BatchCheckLayerAvailability\",\"ecr:CompleteLayerUpload\",\"ecr:InitiateLayerUpload\",\"ecr:PutImage\",\"ecr:UploadLayerPart\",\"ecr:BatchGetImage\",\"ecr:GetDownloadUrlForLayer\",\"ecr:DescribeImages\",\"ecr:DescribeRepositories\",\"ecr:ListImages\",\"ecr:PutImageTagMutability\"],\"Effect\":\"Allow\",\"Resource\":\"arn:aws:ecr:eu-west-1:812982728774:repository/supply-chain/hello-world\"}]}",
+            "role": "supply-chain-eks-github-actions"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "bnVsbA==",
+          "dependencies": [
+            "aws_ecr_repository.main",
+            "aws_iam_role.github_actions",
+            "data.aws_caller_identity.current"
+          ]
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "aws_iam_role_policy",
+      "name": "github_actions_eks_read",
+      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "id": "supply-chain-eks-github-actions:eks-describe",
+            "name": "eks-describe",
+            "name_prefix": "",
+            "policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Action\":[\"eks:DescribeCluster\"],\"Effect\":\"Allow\",\"Resource\":\"arn:aws:eks:eu-west-1:812982728774:cluster/supply-chain-eks\"}]}",
+            "role": "supply-chain-eks-github-actions"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "bnVsbA==",
+          "dependencies": [
+            "aws_eks_cluster.main",
+            "aws_iam_role.eks_cluster",
+            "aws_iam_role.github_actions",
+            "aws_iam_role_policy_attachment.eks_cluster_policy",
+            "aws_subnet.public",
+            "aws_vpc.main",
+            "data.aws_caller_identity.current"
+          ]
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "aws_iam_role_policy_attachment",
+      "name": "cni",
+      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "id": "supply-chain-eks-node-role-20260307104856255800000004",
+            "policy_arn": "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy",
+            "role": "supply-chain-eks-node-role"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "bnVsbA==",
+          "dependencies": [
+            "aws_iam_role.eks_nodes"
+          ]
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "aws_iam_role_policy_attachment",
+      "name": "ecr_read",
+      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "id": "supply-chain-eks-node-role-20260307104856156400000002",
+            "policy_arn": "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly",
+            "role": "supply-chain-eks-node-role"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "bnVsbA==",
+          "dependencies": [
+            "aws_iam_role.eks_nodes"
+          ]
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "aws_iam_role_policy_attachment",
+      "name": "eks_cluster_policy",
+      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "id": "supply-chain-eks-cluster-role-20260307104856054900000001",
+            "policy_arn": "arn:aws:iam::aws:policy/AmazonEKSClusterPolicy",
+            "role": "supply-chain-eks-cluster-role"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "bnVsbA==",
+          "dependencies": [
+            "aws_iam_role.eks_cluster"
+          ]
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "aws_iam_role_policy_attachment",
+      "name": "worker_node",
+      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "id": "supply-chain-eks-node-role-20260307104856173000000003",
+            "policy_arn": "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy",
+            "role": "supply-chain-eks-node-role"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "bnVsbA==",
+          "dependencies": [
+            "aws_iam_role.eks_nodes"
+          ]
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "aws_internet_gateway",
+      "name": "main",
+      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "arn": "arn:aws:ec2:eu-west-1:812982728774:internet-gateway/igw-097a8e212b664b9f8",
+            "id": "igw-097a8e212b664b9f8",
+            "owner_id": "812982728774",
+            "tags": {
+              "Name": "supply-chain-eks-igw"
+            },
+            "tags_all": {
+              "Environment": "thesis-dev",
+              "ManagedBy": "terraform",
+              "Name": "supply-chain-eks-igw",
+              "Phase": "1",
+              "Project": "supply-chain-security"
+            },
+            "timeouts": null,
+            "vpc_id": "vpc-0ce0c5ac2962013ea"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjoxMjAwMDAwMDAwMDAwLCJkZWxldGUiOjEyMDAwMDAwMDAwMDAsInVwZGF0ZSI6MTIwMDAwMDAwMDAwMH19",
+          "dependencies": [
+            "aws_vpc.main"
+          ]
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "aws_route_table",
+      "name": "public",
+      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "arn": "arn:aws:ec2:eu-west-1:812982728774:route-table/rtb-0ff69ab13cc8464c3",
+            "id": "rtb-0ff69ab13cc8464c3",
+            "owner_id": "812982728774",
+            "propagating_vgws": [],
+            "route": [
+              {
+                "carrier_gateway_id": "",
+                "cidr_block": "0.0.0.0/0",
+                "core_network_arn": "",
+                "destination_prefix_list_id": "",
+                "egress_only_gateway_id": "",
+                "gateway_id": "igw-097a8e212b664b9f8",
+                "ipv6_cidr_block": "",
+                "local_gateway_id": "",
+                "nat_gateway_id": "",
+                "network_interface_id": "",
+                "transit_gateway_id": "",
+                "vpc_endpoint_id": "",
+                "vpc_peering_connection_id": ""
+              }
+            ],
+            "tags": {
+              "Name": "supply-chain-eks-rt"
+            },
+            "tags_all": {
+              "Environment": "thesis-dev",
+              "ManagedBy": "terraform",
+              "Name": "supply-chain-eks-rt",
+              "Phase": "1",
+              "Project": "supply-chain-security"
+            },
+            "timeouts": null,
+            "vpc_id": "vpc-0ce0c5ac2962013ea"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjozMDAwMDAwMDAwMDAsImRlbGV0ZSI6MzAwMDAwMDAwMDAwLCJ1cGRhdGUiOjEyMDAwMDAwMDAwMH19",
+          "dependencies": [
+            "aws_internet_gateway.main",
+            "aws_vpc.main"
+          ]
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "aws_route_table_association",
+      "name": "public",
+      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
+      "instances": [
+        {
+          "index_key": 0,
+          "schema_version": 0,
+          "attributes": {
+            "gateway_id": "",
+            "id": "rtbassoc-0c0f5ddfa068a5d05",
+            "route_table_id": "rtb-0ff69ab13cc8464c3",
+            "subnet_id": "subnet-05949642ede7f875f",
+            "timeouts": null
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjozMDAwMDAwMDAwMDAsImRlbGV0ZSI6MzAwMDAwMDAwMDAwLCJ1cGRhdGUiOjEyMDAwMDAwMDAwMH19",
+          "dependencies": [
+            "aws_internet_gateway.main",
+            "aws_route_table.public",
+            "aws_subnet.public",
+            "aws_vpc.main"
+          ]
+        },
+        {
+          "index_key": 1,
+          "schema_version": 0,
+          "attributes": {
+            "gateway_id": "",
+            "id": "rtbassoc-04c58bcbaabe30f1e",
+            "route_table_id": "rtb-0ff69ab13cc8464c3",
+            "subnet_id": "subnet-011c1957925ac3d07",
+            "timeouts": null
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjozMDAwMDAwMDAwMDAsImRlbGV0ZSI6MzAwMDAwMDAwMDAwLCJ1cGRhdGUiOjEyMDAwMDAwMDAwMH19",
+          "dependencies": [
+            "aws_internet_gateway.main",
+            "aws_route_table.public",
+            "aws_subnet.public",
+            "aws_vpc.main"
+          ]
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "aws_subnet",
+      "name": "public",
+      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
+      "instances": [
+        {
+          "index_key": 0,
+          "schema_version": 1,
+          "attributes": {
+            "arn": "arn:aws:ec2:eu-west-1:812982728774:subnet/subnet-05949642ede7f875f",
+            "assign_ipv6_address_on_creation": false,
+            "availability_zone": "eu-west-1a",
+            "availability_zone_id": "euw1-az2",
+            "cidr_block": "10.0.0.0/24",
+            "customer_owned_ipv4_pool": "",
+            "enable_dns64": false,
+            "enable_lni_at_device_index": 0,
+            "enable_resource_name_dns_a_record_on_launch": false,
+            "enable_resource_name_dns_aaaa_record_on_launch": false,
+            "id": "subnet-05949642ede7f875f",
+            "ipv6_cidr_block": "",
+            "ipv6_cidr_block_association_id": "",
+            "ipv6_native": false,
+            "map_customer_owned_ip_on_launch": false,
+            "map_public_ip_on_launch": true,
+            "outpost_arn": "",
+            "owner_id": "812982728774",
+            "private_dns_hostname_type_on_launch": "ip-name",
+            "tags": {
+              "Name": "supply-chain-eks-public-0",
+              "kubernetes.io/cluster/supply-chain-eks": "owned",
+              "kubernetes.io/role/elb": "1"
+            },
+            "tags_all": {
+              "Environment": "thesis-dev",
+              "ManagedBy": "terraform",
+              "Name": "supply-chain-eks-public-0",
+              "Phase": "1",
+              "Project": "supply-chain-security",
+              "kubernetes.io/cluster/supply-chain-eks": "owned",
+              "kubernetes.io/role/elb": "1"
+            },
+            "timeouts": null,
+            "vpc_id": "vpc-0ce0c5ac2962013ea"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjo2MDAwMDAwMDAwMDAsImRlbGV0ZSI6MTIwMDAwMDAwMDAwMH0sInNjaGVtYV92ZXJzaW9uIjoiMSJ9",
+          "dependencies": [
+            "aws_vpc.main"
+          ]
+        },
+        {
+          "index_key": 1,
+          "schema_version": 1,
+          "attributes": {
+            "arn": "arn:aws:ec2:eu-west-1:812982728774:subnet/subnet-011c1957925ac3d07",
+            "assign_ipv6_address_on_creation": false,
+            "availability_zone": "eu-west-1b",
+            "availability_zone_id": "euw1-az3",
+            "cidr_block": "10.0.1.0/24",
+            "customer_owned_ipv4_pool": "",
+            "enable_dns64": false,
+            "enable_lni_at_device_index": 0,
+            "enable_resource_name_dns_a_record_on_launch": false,
+            "enable_resource_name_dns_aaaa_record_on_launch": false,
+            "id": "subnet-011c1957925ac3d07",
+            "ipv6_cidr_block": "",
+            "ipv6_cidr_block_association_id": "",
+            "ipv6_native": false,
+            "map_customer_owned_ip_on_launch": false,
+            "map_public_ip_on_launch": true,
+            "outpost_arn": "",
+            "owner_id": "812982728774",
+            "private_dns_hostname_type_on_launch": "ip-name",
+            "tags": {
+              "Name": "supply-chain-eks-public-1",
+              "kubernetes.io/cluster/supply-chain-eks": "owned",
+              "kubernetes.io/role/elb": "1"
+            },
+            "tags_all": {
+              "Environment": "thesis-dev",
+              "ManagedBy": "terraform",
+              "Name": "supply-chain-eks-public-1",
+              "Phase": "1",
+              "Project": "supply-chain-security",
+              "kubernetes.io/cluster/supply-chain-eks": "owned",
+              "kubernetes.io/role/elb": "1"
+            },
+            "timeouts": null,
+            "vpc_id": "vpc-0ce0c5ac2962013ea"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjo2MDAwMDAwMDAwMDAsImRlbGV0ZSI6MTIwMDAwMDAwMDAwMH0sInNjaGVtYV92ZXJzaW9uIjoiMSJ9",
+          "dependencies": [
+            "aws_vpc.main"
+          ]
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "aws_vpc",
+      "name": "main",
+      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
+      "instances": [
+        {
+          "schema_version": 1,
+          "attributes": {
+            "arn": "arn:aws:ec2:eu-west-1:812982728774:vpc/vpc-0ce0c5ac2962013ea",
+            "assign_generated_ipv6_cidr_block": false,
+            "cidr_block": "10.0.0.0/16",
+            "default_network_acl_id": "acl-0e7d0ebbcd6a88c33",
+            "default_route_table_id": "rtb-03e4c7ad24ba0e788",
+            "default_security_group_id": "sg-0b08a33d1afd9703c",
+            "dhcp_options_id": "dopt-0a63dd16c9bcb29f1",
+            "enable_dns_hostnames": true,
+            "enable_dns_support": true,
+            "enable_network_address_usage_metrics": false,
+            "id": "vpc-0ce0c5ac2962013ea",
+            "instance_tenancy": "default",
+            "ipv4_ipam_pool_id": null,
+            "ipv4_netmask_length": null,
+            "ipv6_association_id": "",
+            "ipv6_cidr_block": "",
+            "ipv6_cidr_block_network_border_group": "",
+            "ipv6_ipam_pool_id": "",
+            "ipv6_netmask_length": 0,
+            "main_route_table_id": "rtb-03e4c7ad24ba0e788",
+            "owner_id": "812982728774",
+            "tags": {
+              "Name": "supply-chain-eks-vpc"
+            },
+            "tags_all": {
+              "Environment": "thesis-dev",
+              "ManagedBy": "terraform",
+              "Name": "supply-chain-eks-vpc",
+              "Phase": "1",
+              "Project": "supply-chain-security"
+            }
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "eyJzY2hlbWFfdmVyc2lvbiI6IjEifQ=="
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "helm_release",
+      "name": "kyverno",
+      "provider": "provider[\"registry.terraform.io/hashicorp/helm\"]",
+      "instances": [
+        {
+          "schema_version": 1,
+          "attributes": {
+            "atomic": false,
+            "chart": "kyverno",
+            "cleanup_on_fail": false,
+            "create_namespace": true,
+            "dependency_update": false,
+            "description": null,
+            "devel": null,
+            "disable_crd_hooks": false,
+            "disable_openapi_validation": false,
+            "disable_webhooks": false,
+            "force_update": false,
+            "id": "kyverno",
+            "keyring": null,
+            "lint": false,
+            "manifest": null,
+            "max_history": 0,
+            "metadata": [
+              {
+                "app_version": "v1.11.4",
+                "chart": "kyverno",
+                "first_deployed": 1772881130,
+                "last_deployed": 1772881130,
+                "name": "kyverno",
+                "namespace": "kyverno",
+                "notes": "Chart version: 3.1.4\nKyverno version: v1.11.4\n\nThank you for installing kyverno! Your release is named kyverno.\n\nThe following components have been installed in your cluster:\n- CRDs\n- Admission controller\n- Reports controller\n- Cleanup controller\n- Background controller\n\n\n⚠️  WARNING: Setting the admission controller replica count below 3 means Kyverno is not running in high availability mode.\n\n💡 Note: There is a trade-off when deciding which approach to take regarding Namespace exclusions. Please see the documentation at https://kyverno.io/docs/installation/#security-vs-operability to understand the risks.\n",
+                "revision": 1,
+                "values": "{\"admissionController\":{\"replicas\":1},\"backgroundController\":{\"enabled\":true},\"cleanupController\":{\"enabled\":true},\"config\":{\"webhooks\":[{\"name\":\"mutating-webhook-cfg\",\"timeoutSeconds\":15},{\"name\":\"validating-webhook-cfg\",\"timeoutSeconds\":15}]},\"failurePolicy\":\"Ignore\",\"logLevel\":\"info\",\"metricsService\":{\"create\":true,\"port\":8000},\"replicaCount\":1,\"reportsController\":{\"enabled\":true},\"resources\":{\"limits\":{\"cpu\":\"500m\",\"memory\":\"512Mi\"},\"requests\":{\"cpu\":\"100m\",\"memory\":\"256Mi\"}}}",
+                "version": "3.1.4"
+              }
+            ],
+            "name": "kyverno",
+            "namespace": "kyverno",
+            "pass_credentials": false,
+            "postrender": [],
+            "recreate_pods": false,
+            "render_subchart_notes": true,
+            "replace": false,
+            "repository": "https://kyverno.github.io/kyverno/",
+            "repository_ca_file": null,
+            "repository_cert_file": null,
+            "repository_key_file": null,
+            "repository_password": null,
+            "repository_username": null,
+            "reset_values": false,
+            "reuse_values": false,
+            "set": [],
+            "set_list": [],
+            "set_sensitive": [],
+            "skip_crds": false,
+            "status": "deployed",
+            "timeout": 300,
+            "upgrade_install": null,
+            "values": [
+              "# helm/kyverno-values.yaml\n# Cloud-agnostic Kyverno configuration.\n# Applied to both EKS (now) and AKS (future) using the same file.\n# The only cloud-specific details are in the ClusterPolicy YAMLs (Phase 3),\n# not here — specifically the registry URL prefix and OIDC issuer subject.\n\nreplicaCount: 1\n\nresources:\n  limits:\n    cpu: 500m\n    memory: 512Mi\n  requests:\n    cpu: 100m\n    memory: 256Mi\n\nadmissionController:\n  replicas: 1\n\n# Background controller scans existing resources periodically\nbackgroundController:\n  enabled: true\n\n# Reports controller writes PolicyReport objects — used in Phase 3 audit mode\nreportsController:\n  enabled: true\n\ncleanupController:\n  enabled: true\n\n# Fail-open: if Kyverno itself crashes, pods are still admitted.\n# Thesis note: discuss fail-open vs fail-closed trade-offs in Chapter 5.\n# Switch to Fail for hardened production deployments.\nfailurePolicy: Ignore\n\n# Log level: use debug during Phase 3 policy development, then revert to info\nlogLevel: info\n\n# Expose Prometheus metrics — consumed in Phase 4/5 latency measurements.\n# Enable serviceMonitor if Prometheus Operator is installed.\nmetricsService:\n  create: true\n  port: 8000\n\nconfig:\n  webhooks:\n    - name: mutating-webhook-cfg\n      timeoutSeconds: 15\n    - name: validating-webhook-cfg\n      timeoutSeconds: 15\n"
+            ],
+            "verify": false,
+            "version": "3.1.4",
+            "wait": true,
+            "wait_for_jobs": false
+          },
+          "sensitive_attributes": [
+            [
+              {
+                "type": "get_attr",
+                "value": "repository_password"
+              }
+            ]
+          ],
+          "identity_schema_version": 0,
+          "private": "eyJzY2hlbWFfdmVyc2lvbiI6IjEifQ==",
+          "dependencies": [
+            "aws_eks_cluster.main",
+            "aws_eks_node_group.main",
+            "aws_iam_role.eks_cluster",
+            "aws_iam_role.eks_nodes",
+            "aws_iam_role_policy_attachment.cni",
+            "aws_iam_role_policy_attachment.ecr_read",
+            "aws_iam_role_policy_attachment.eks_cluster_policy",
+            "aws_iam_role_policy_attachment.worker_node",
+            "aws_subnet.public",
+            "aws_vpc.main"
+          ]
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "kubernetes_config_map_v1_data",
+      "name": "aws_auth",
+      "provider": "provider[\"registry.terraform.io/hashicorp/kubernetes\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "data": {
+              "mapRoles": "- \"groups\":\n  - \"system:bootstrappers\"\n  - \"system:nodes\"\n  \"rolearn\": \"arn:aws:iam::812982728774:role/supply-chain-eks-node-role\"\n  \"username\": \"system:node:{{EC2PrivateDNSName}}\"\n- \"groups\":\n  - \"system:masters\"\n  \"rolearn\": \"arn:aws:iam::812982728774:role/supply-chain-eks-github-actions\"\n  \"username\": \"github-actions\"\n"
+            },
+            "field_manager": "Terraform",
+            "force": true,
+            "id": "kube-system/aws-auth",
+            "metadata": [
+              {
+                "name": "aws-auth",
+                "namespace": "kube-system"
+              }
+            ]
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "bnVsbA==",
+          "dependencies": [
+            "aws_eks_cluster.main",
+            "aws_iam_role.eks_cluster",
+            "aws_iam_role.eks_nodes",
+            "aws_iam_role.github_actions",
+            "aws_iam_role_policy_attachment.eks_cluster_policy",
+            "aws_subnet.public",
+            "aws_vpc.main",
+            "data.aws_caller_identity.current"
+          ]
+        }
+      ]
+    }
+  ],
+  "check_results": null
+}
