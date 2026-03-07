@@ -8,6 +8,16 @@
 *.so
 *.dylib
 *.Identifier
+**/.terraform/
+*.tfstate
+*.tfstate.backup
+*.tfstate.lock.info
+.terraform.lock.hcl
+crash.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
 
 # Test binary, built with `go test -c`
 *.test
@@ -27,7 +37,11 @@ go.work.sum
 
 # env file
 .env
+env.aws
+env.azure
 
 # Editor/IDE
-# .idea/
-# .vscode/
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
