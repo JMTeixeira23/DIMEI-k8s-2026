@@ -1,0 +1,62 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: verify-sbom-cyclonedx
+  annotations:
+    policies.kyverno.io/title: Verify CycloneDX SBOM Attestation
+    policies.kyverno.io/category: Supply Chain Security
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/subject: Pod
+    policies.kyverno.io/description: >-
+      Requires all container images to have a valid CycloneDX SBOM attestation
+      signed by the approved CI identity. Ensures every deployed image has a
+      documented and verifiable software bill of materials, enabling component
+      visibility and vulnerability tracking.
+      Phase 3 — Thesis: enforces SBOM presence at admission time.
+spec:
+  validationFailureAction: Enforce
+  background: true
+
+  rules:
+    - name: check-sbom-cyclonedx
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces: ["default", "supply-chain-demo"]
+
+      verifyImages:
+        - imageReferences:
+            - "812982728774.dkr.ecr.*.amazonaws.com/*"
+
+          attestors:
+            - count: 1
+              entries:
+                - keyless:
+                    subject: "https://github.com/JMTeixeira23/DIMEI-k8s-2026/.github/workflows/phase2-pipeline.yml@refs/heads/main"
+                    issuer: "https://token.actions.githubusercontent.com"
+                    rekor:
+                      url: https://rekor.sigstore.dev
+
+          attestations:
+            - predicateType: "https://cyclonedx.org/bom"
+              # Verify the SBOM attestation is present and signed.
+              # The condition checks that specVersion is a non-empty string,
+              # confirming a valid CycloneDX document was attached.
+              attestors:
+                - count: 1
+                  entries:
+                    - keyless:
+                        subject: "https://github.com/JMTeixeira23/DIMEI-k8s-2026/.github/workflows/phase2-pipeline.yml@refs/heads/main"
+                        issuer: "https://token.actions.githubusercontent.com"
+                        rekor:
+                          url: https://rekor.sigstore.dev
+              conditions:
+                - all:
+                    - key: "{{ attestation.statement.predicate.specVersion }}"
+                      operator: NotEquals
+                      value: ""
+
+          mutateDigest: true
+          verifyDigest: true
+          required: true

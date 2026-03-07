@@ -1,0 +1,237 @@
+name: Phase 3 — Kyverno Policies (AWS)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/phase3-policies.yml'
+      - 'kyverno/**'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Policy validation failure action'
+        required: true
+        default: 'Audit'
+        type: choice
+        options: [Audit, Enforce]
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  # ───────────────────────────────────────────────────────────────────────────
+  # JOB 1 — APPLY POLICIES
+  # Applies all three ClusterPolicies to the EKS cluster.
+  # On first run use Audit mode to confirm signed images pass before blocking.
+  # Switch to Enforce once you have verified the signed image is admitted.
+  # ───────────────────────────────────────────────────────────────────────────
+  apply-policies:
+    name: Apply Kyverno ClusterPolicies
+    runs-on: ubuntu-latest
+    environment: aws
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+          role-session-name: phase3-apply
+
+      - name: Update kubeconfig for EKS
+        run: |
+          aws eks update-kubeconfig \
+            --region "${{ secrets.AWS_REGION }}" \
+            --name "${{ secrets.EKS_CLUSTER_NAME }}"
+
+      - name: Set policy mode
+        run: |
+          MODE="${{ github.event.inputs.mode || 'Audit' }}"
+          echo "Setting validationFailureAction to: ${MODE}"
+
+          # Patch all policy files with the selected mode
+          for f in kyverno/verify-image-signature.yaml \
+                   kyverno/verify-slsa-provenance.yaml \
+                   kyverno/verify-sbom-cyclonedx.yaml; do
+            sed -i "s/validationFailureAction: .*/validationFailureAction: ${MODE}/" "$f"
+            echo "  ✅ ${f} → ${MODE}"
+          done
+
+      - name: Apply ClusterPolicies
+        run: |
+          kubectl apply -f kyverno/verify-image-signature.yaml
+          kubectl apply -f kyverno/verify-slsa-provenance.yaml
+          kubectl apply -f kyverno/verify-sbom-cyclonedx.yaml
+
+          echo ""
+          echo "─── Applied policies ───"
+          kubectl get clusterpolicies
+
+      - name: Wait for policies to be ready
+        run: |
+          echo "Waiting for policies to become ready..."
+          sleep 10
+          kubectl get clusterpolicies -o wide
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # JOB 2 — TEST MATRIX
+  # Runs the full policy test matrix and records results.
+  # This is the empirical evidence for thesis Chapter 6.
+  #
+  # Test cases:
+  #   TC-01: Signed image with SBOM + provenance     → ADMIT
+  #   TC-02: Unsigned image (nginx from Docker Hub)  → BLOCK
+  #   TC-03: Image from wrong registry               → BLOCK
+  # ───────────────────────────────────────────────────────────────────────────
+  test-matrix:
+    name: Policy Test Matrix
+    runs-on: ubuntu-latest
+    needs: apply-policies
+    environment: aws
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+          role-session-name: phase3-test
+
+      - name: Log in to ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Update kubeconfig for EKS
+        run: |
+          aws eks update-kubeconfig \
+            --region "${{ secrets.AWS_REGION }}" \
+            --name "${{ secrets.EKS_CLUSTER_NAME }}"
+
+      - name: Get latest signed image from ECR
+        env:
+          ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          ECR_REPO: ${{ secrets.ECR_REPO_NAME }}
+        run: |
+          # Get the most recently pushed image tag
+          LATEST_TAG=$(aws ecr describe-images \
+            --repository-name "${ECR_REPO}" \
+            --region "${{ secrets.AWS_REGION }}" \
+            --query 'sort_by(imageDetails,& imagePushedAt)[-1].imageTags[0]' \
+            --output text)
+
+          SIGNED_IMAGE="${ECR_REGISTRY}/${ECR_REPO}:${LATEST_TAG}"
+          echo "SIGNED_IMAGE=${SIGNED_IMAGE}" >> $GITHUB_ENV
+          echo "Latest signed image: ${SIGNED_IMAGE}"
+
+      - name: Setup test namespace
+        run: |
+          kubectl create namespace supply-chain-demo --dry-run=client -o yaml \
+            | kubectl apply -f -
+
+      - name: "TC-01: Signed image — expect ADMIT"
+        run: |
+          echo "════════════════════════════════════════"
+          echo "TC-01: Signed image with SBOM + provenance"
+          echo "Expected result: ADMITTED"
+          echo "════════════════════════════════════════"
+
+          kubectl delete pod tc-01 -n supply-chain-demo --ignore-not-found
+          sleep 2
+
+          if kubectl run tc-01 \
+            --image="${SIGNED_IMAGE}" \
+            --restart=Never \
+            --namespace=supply-chain-demo \
+            --command -- sh -c 'echo TC-01 passed' 2>&1; then
+            echo "✅ TC-01 PASS — signed image was ADMITTED as expected"
+            sleep 10
+            kubectl logs tc-01 -n supply-chain-demo 2>/dev/null || true
+            kubectl delete pod tc-01 -n supply-chain-demo --ignore-not-found
+          else
+            echo "❌ TC-01 FAIL — signed image was unexpectedly BLOCKED"
+            kubectl get clusterpolicies
+            exit 1
+          fi
+
+      - name: "TC-02: Unsigned image (nginx) — expect BLOCK"
+        run: |
+          echo "════════════════════════════════════════"
+          echo "TC-02: Unsigned image from Docker Hub"
+          echo "Expected result: BLOCKED"
+          echo "════════════════════════════════════════"
+
+          kubectl delete pod tc-02 -n supply-chain-demo --ignore-not-found
+          sleep 2
+
+          if kubectl run tc-02 \
+            --image="nginx:latest" \
+            --restart=Never \
+            --namespace=supply-chain-demo \
+            --command -- sh -c 'echo TC-02' 2>&1 | tee /tmp/tc-02-output.txt; then
+            echo "❌ TC-02 FAIL — unsigned image was admitted (policy not enforcing)"
+            kubectl delete pod tc-02 -n supply-chain-demo --ignore-not-found
+            # Don't exit 1 in Audit mode — just report
+          else
+            echo "✅ TC-02 PASS — unsigned image was BLOCKED as expected"
+            cat /tmp/tc-02-output.txt
+          fi
+
+      - name: "TC-03: Wrong registry image — expect BLOCK"
+        run: |
+          echo "════════════════════════════════════════"
+          echo "TC-03: Image from unrecognised registry"
+          echo "Expected result: BLOCKED"
+          echo "════════════════════════════════════════"
+
+          kubectl delete pod tc-03 -n supply-chain-demo --ignore-not-found
+          sleep 2
+
+          if kubectl run tc-03 \
+            --image="alpine:3.19" \
+            --restart=Never \
+            --namespace=supply-chain-demo \
+            --command -- sh -c 'echo TC-03' 2>&1 | tee /tmp/tc-03-output.txt; then
+            echo "❌ TC-03 FAIL — image from wrong registry was admitted"
+            kubectl delete pod tc-03 -n supply-chain-demo --ignore-not-found
+          else
+            echo "✅ TC-03 PASS — image from wrong registry was BLOCKED as expected"
+            cat /tmp/tc-03-output.txt
+          fi
+
+      - name: Print policy reports (thesis evidence)
+        run: |
+          echo "════════════════════════════════════════════════════"
+          echo "  Phase 3 — Kyverno Policy Reports"
+          echo "  Save this output for thesis Chapter 6"
+          echo "════════════════════════════════════════════════════"
+          echo ""
+          echo "─── ClusterPolicies ───"
+          kubectl get clusterpolicies -o wide
+          echo ""
+          echo "─── PolicyReports (supply-chain-demo namespace) ───"
+          kubectl get policyreport -n supply-chain-demo 2>/dev/null || echo "(none yet — run again after TC-01)"
+          echo ""
+          echo "─── ClusterPolicyReports ───"
+          kubectl get clusterpolicyreport 2>/dev/null || echo "(none yet)"
+
+      - name: Summary
+        run: |
+          echo ""
+          echo "════════════════════════════════════════════════════"
+          echo "  Phase 3 Test Matrix Summary"
+          echo "════════════════════════════════════════════════════"
+          echo "  TC-01  Signed image + SBOM + provenance → ADMIT"
+          echo "  TC-02  Unsigned image (nginx)            → BLOCK"
+          echo "  TC-03  Wrong registry (alpine)           → BLOCK"
+          echo ""
+          echo "  Mode: ${{ github.event.inputs.mode || 'Audit' }}"
+          echo ""
+          echo "  Next: re-run with mode=Enforce to switch policies to blocking mode"
+          echo "════════════════════════════════════════════════════"

@@ -1,0 +1,58 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: verify-image-signature
+  annotations:
+    policies.kyverno.io/title: Verify Image Signature
+    policies.kyverno.io/category: Supply Chain Security
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/subject: Pod
+    policies.kyverno.io/description: >-
+      Requires all container images to be signed with Cosign keyless signing
+      via the approved GitHub Actions OIDC identity. Images without a valid
+      Sigstore signature are rejected at admission time.
+      Phase 3 — Thesis: enforces RQ supply chain integrity claim.
+spec:
+  # Start in Audit mode — switch to Enforce after confirming signed images pass.
+  # Audit logs violations without blocking deployments.
+  # Enforce blocks the deployment and returns an error to kubectl.
+  validationFailureAction: Enforce
+
+  background: true  # Also scan existing resources, not just new admissions
+
+  rules:
+    - name: check-image-signature
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              # Scope to supply-chain-demo namespace — expand in Phase 5
+              # to test policy bypass via namespace scoping (Attack 5)
+              namespaces: ["default", "supply-chain-demo"]
+
+      verifyImages:
+        - imageReferences:
+            # Match your ECR registry — cloud-agnostic pattern using wildcard.
+            # Future Azure: add "*.azurecr.io/*" here — policy structure unchanged.
+            - "812982728774.dkr.ecr.*.amazonaws.com/*"
+
+          # Keyless verification — no public key to manage.
+          # Kyverno fetches the Fulcio certificate and checks:
+          #   1. The certificate was issued by Fulcio (trusted CA)
+          #   2. The subject matches the expected GitHub Actions workflow
+          #   3. The issuer matches token.actions.githubusercontent.com
+          #   4. The signature is recorded in the Rekor transparency log
+          attestors:
+            - count: 1
+              entries:
+                - keyless:
+                    subject: "https://github.com/JMTeixeira23/DIMEI-k8s-2026/.github/workflows/phase2-pipeline.yml@refs/heads/main"
+                    issuer: "https://token.actions.githubusercontent.com"
+                    rekor:
+                      url: https://rekor.sigstore.dev
+
+          # Mutate the image reference to use the verified digest.
+          # This prevents TOCTOU attacks where the tag is changed after verification.
+          mutateDigest: true
+          verifyDigest: true
+          required: true
