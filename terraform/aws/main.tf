@@ -134,6 +134,7 @@ resource "aws_eks_node_group" "main" {
   node_role_arn   = aws_iam_role.eks_nodes.arn
   subnet_ids      = aws_subnet.public[*].id
   instance_types  = [var.node_instance_type]
+  ami_type       = "AL2023_x86_64_STANDARD"
 
   scaling_config {
     desired_size = var.node_desired
@@ -351,4 +352,35 @@ resource "aws_eks_access_policy_association" "github_actions_admin" {
   }
 
   depends_on = [aws_eks_access_entry.github_actions]
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AWS-AUTH CONFIGMAP
+# Grants the node role and GitHub Actions role access to the cluster.
+# Node role must be here or nodes cannot join the cluster.
+# ─────────────────────────────────────────────────────────────────────────────
+resource "kubernetes_config_map_v1_data" "aws_auth" {
+  metadata {
+    name      = "aws-auth"
+    namespace = "kube-system"
+  }
+
+  data = {
+    mapRoles = yamlencode([
+      {
+        rolearn  = aws_iam_role.eks_nodes.arn
+        username = "system:node:{{EC2PrivateDNSName}}"
+        groups   = ["system:bootstrappers", "system:nodes"]
+      },
+      {
+        rolearn  = aws_iam_role.github_actions.arn
+        username = "github-actions"
+        groups   = ["system:masters"]
+      }
+    ])
+  }
+
+  force = true
+
+  depends_on = [aws_eks_cluster.main]
 }

@@ -137,7 +137,8 @@ jobs:
           echo "--- Pod events (look for image pull errors here) ---"
           kubectl describe pod smoke-test | grep -A 20 "Events:"
 
-          kubectl wait --for=condition=Succeeded pod/smoke-test --timeout=90s
+          # Wait for pod phase=Succeeded (not a condition — hence jsonpath)
+          kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/smoke-test --timeout=90s
           echo "--- Pod logs ---"
           kubectl logs smoke-test
           kubectl delete pod smoke-test --ignore-not-found
