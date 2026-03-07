@@ -1,0 +1,405 @@
+name: Phase 2 — Sign + SBOM + Provenance (AWS)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/phase2-pipeline.yml'
+      - 'docker/**'
+  workflow_dispatch:
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Permissions:
+#   id-token:write — OIDC token for AWS auth AND Cosign keyless signing
+#   contents:read  — checkout code
+#   actions:read   — read workflow run info for provenance
+# ─────────────────────────────────────────────────────────────────────────────
+permissions:
+  id-token: write
+  contents: read
+  actions: read
+
+env:
+  IMAGE_NAME: hello-world
+  IMAGE_TAG: ${{ github.sha }}
+
+jobs:
+  # ───────────────────────────────────────────────────────────────────────────
+  # JOB 1 — BUILD & PUSH
+  # Builds the image and pushes to ECR.
+  # Outputs the exact digest so all downstream jobs reference the same bytes.
+  # ───────────────────────────────────────────────────────────────────────────
+  build-and-push:
+    name: Build & Push to ECR
+    runs-on: ubuntu-latest
+    environment: aws
+    outputs:
+      image-digest: ${{ steps.push.outputs.digest }}
+      full-image:   ${{ steps.push.outputs.full-image }}
+      image-ref:    ${{ steps.push.outputs.image-ref }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+          role-session-name: phase2-build
+
+      - name: Log in to ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push to ECR
+        id: push
+        env:
+          ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          ECR_REPO: ${{ secrets.ECR_REPO_NAME }}
+        run: |
+          FULL_IMAGE="${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG}"
+
+          docker buildx build \
+            --build-arg GIT_SHA="${IMAGE_TAG}" \
+            --tag "${FULL_IMAGE}" \
+            --push \
+            docker/hello-world
+
+          # Get digest from registry after push
+          DIGEST=$(docker buildx imagetools inspect "${FULL_IMAGE}" \
+            --format '{{json .Manifest}}' | jq -r '.digest')
+
+          REPO="${ECR_REGISTRY}/${ECR_REPO}"
+          IMAGE_REF="${REPO}@${DIGEST}"
+
+          echo "full-image=${FULL_IMAGE}" >> $GITHUB_OUTPUT
+          echo "digest=${DIGEST}"         >> $GITHUB_OUTPUT
+          echo "image-ref=${IMAGE_REF}"   >> $GITHUB_OUTPUT
+
+          echo "✅ Pushed    : ${FULL_IMAGE}"
+          echo "✅ Digest    : ${DIGEST}"
+          echo "✅ Image ref : ${IMAGE_REF}"
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # JOB 2 — SIGN
+  # Signs the image digest with Cosign keyless signing.
+  # Certificate issued by Fulcio, entry recorded in Rekor transparency log.
+  # No private key is stored anywhere.
+  # ───────────────────────────────────────────────────────────────────────────
+  sign:
+    name: Sign Image
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    environment: aws
+
+    steps:
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+          role-session-name: phase2-sign
+
+      - name: Log in to ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: v2.2.3
+
+      - name: Sign image by digest (keyless)
+        run: |
+          IMAGE_REF="${{ needs.build-and-push.outputs.image-ref }}"
+          cosign sign --yes "${IMAGE_REF}"
+          echo "✅ Signed: ${IMAGE_REF}"
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # JOB 3 — SBOM
+  # Generates a CycloneDX JSON SBOM using Syft and attaches it to the image
+  # as a signed Cosign attestation.
+  #
+  # predicateType = cyclonedx
+  # This is what Kyverno's verify-sbom-cyclonedx ClusterPolicy (Phase 3)
+  # checks for at pod admission time.
+  # ───────────────────────────────────────────────────────────────────────────
+  sbom:
+    name: Generate & Attest SBOM
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    environment: aws
+
+    steps:
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+          role-session-name: phase2-sbom
+
+      - name: Log in to ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: v2.2.3
+
+      - name: Install Syft
+        uses: anchore/sbom-action/download-syft@v0
+        with:
+          syft-version: v0.105.1
+
+      - name: Generate CycloneDX SBOM
+        run: |
+          IMAGE_REF="${{ needs.build-and-push.outputs.image-ref }}"
+
+          echo "📋 Generating SBOM for: ${IMAGE_REF}"
+
+          syft "${IMAGE_REF}" \
+            --output cyclonedx-json \
+            --file sbom.cdx.json
+
+          echo "✅ SBOM generated"
+          echo "   Spec version : $(jq -r '.specVersion' sbom.cdx.json)"
+          echo "   Components   : $(jq '.components | length' sbom.cdx.json)"
+          echo ""
+          echo "─── Packages in image ───"
+          jq -r '.components[] | "  \(.name) \(.version // "n/a")"' sbom.cdx.json
+
+      - name: Attach SBOM as signed Cosign attestation
+        run: |
+          IMAGE_REF="${{ needs.build-and-push.outputs.image-ref }}"
+
+          cosign attest --yes \
+            --predicate sbom.cdx.json \
+            --type cyclonedx \
+            "${IMAGE_REF}"
+
+          echo "✅ SBOM attestation attached (predicateType: cyclonedx)"
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # JOB 4 — SLSA PROVENANCE
+  # Generates SLSA Build L2 provenance and attaches it as a signed attestation.
+  #
+  # The provenance JSON records:
+  #   - Builder identity (this GitHub Actions workflow + OIDC subject)
+  #   - Source: repo, branch, commit SHA
+  #   - Build trigger (push / workflow_dispatch)
+  #   - Image digest being attested
+  #
+  # predicateType = https://slsa.dev/provenance/v1
+  # This is what Kyverno's verify-slsa-provenance ClusterPolicy (Phase 3)
+  # checks for — specifically that builder.id matches the approved CI identity.
+  #
+  # Note: We generate the provenance JSON inline and attest with Cosign.
+  # This is the standard approach for ECR, where the slsa-github-generator
+  # reusable workflow has authentication limitations.
+  # ───────────────────────────────────────────────────────────────────────────
+  provenance:
+    name: Generate & Attest SLSA Provenance
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    environment: aws
+
+    steps:
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+          role-session-name: phase2-provenance
+
+      - name: Log in to ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: v2.2.3
+
+      - name: Generate SLSA provenance predicate
+        run: |
+          IMAGE_REF="${{ needs.build-and-push.outputs.image-ref }}"
+          DIGEST="${{ needs.build-and-push.outputs.image-digest }}"
+          FULL_IMAGE="${{ needs.build-and-push.outputs.full-image }}"
+
+          # Build the SLSA v1.0 provenance predicate JSON.
+          # builder.id identifies the specific workflow — Kyverno Phase 3
+          # policy checks this matches an approved pattern.
+          cat > provenance.json << EOF
+          {
+            "buildDefinition": {
+              "buildType": "https://slsa.dev/container-based-build/v0.1",
+              "externalParameters": {
+                "source": {
+                  "uri": "git+https://github.com/${{ github.repository }}@refs/heads/${{ github.ref_name }}",
+                  "digest": {
+                    "gitCommit": "${{ github.sha }}"
+                  }
+                },
+                "image": "${FULL_IMAGE}"
+              },
+              "internalParameters": {
+                "githubEventName": "${{ github.event_name }}",
+                "githubWorkflow": "${{ github.workflow }}",
+                "githubRunId": "${{ github.run_id }}",
+                "githubRunAttempt": "${{ github.run_attempt }}"
+              },
+              "resolvedDependencies": [
+                {
+                  "uri": "git+https://github.com/${{ github.repository }}@refs/heads/${{ github.ref_name }}",
+                  "digest": {
+                    "gitCommit": "${{ github.sha }}"
+                  }
+                }
+              ]
+            },
+            "runDetails": {
+              "builder": {
+                "id": "https://github.com/${{ github.repository }}/.github/workflows/phase2-pipeline.yml@refs/heads/${{ github.ref_name }}"
+              },
+              "metadata": {
+                "invocationId": "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}",
+                "startedOn": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+                "finishedOn": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+              }
+            }
+          }
+          EOF
+
+          echo "✅ Provenance predicate generated"
+          cat provenance.json | jq .
+
+      - name: Attach provenance as signed Cosign attestation
+        run: |
+          IMAGE_REF="${{ needs.build-and-push.outputs.image-ref }}"
+
+          # predicateType slsaprovenance1 = SLSA provenance v1
+          # This is the type Kyverno's verify-slsa-provenance policy checks for
+          cosign attest --yes \
+            --predicate provenance.json \
+            --type slsaprovenance1 \
+            "${IMAGE_REF}"
+
+          echo "✅ Provenance attestation attached (predicateType: slsaprovenance1)"
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # JOB 5 — VERIFY ALL ATTESTATIONS
+  # Confirms all 3 artefacts are present and valid before smoke testing.
+  # The cosign tree output here is the key Phase 2 thesis evidence.
+  # ───────────────────────────────────────────────────────────────────────────
+  verify-all:
+    name: Verify All Attestations
+    runs-on: ubuntu-latest
+    needs: [build-and-push, sign, sbom, provenance]
+    environment: aws
+
+    steps:
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+          role-session-name: phase2-verify
+
+      - name: Log in to ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: v2.2.3
+
+      - name: Verify signature
+        run: |
+          IMAGE_REF="${{ needs.build-and-push.outputs.image-ref }}"
+          cosign verify \
+            --certificate-identity-regexp "https://github.com/${{ github.repository }}.*" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "${IMAGE_REF}"
+          echo "✅ Signature verified"
+
+      - name: Verify SBOM attestation
+        run: |
+          IMAGE_REF="${{ needs.build-and-push.outputs.image-ref }}"
+          cosign verify-attestation \
+            --certificate-identity-regexp "https://github.com/${{ github.repository }}.*" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            --type cyclonedx \
+            "${IMAGE_REF}" \
+            | jq -r '.payload | @base64d | fromjson |
+                "✅ SBOM verified — predicateType: \(.predicateType)"'
+
+      - name: Verify provenance attestation
+        run: |
+          IMAGE_REF="${{ needs.build-and-push.outputs.image-ref }}"
+          cosign verify-attestation \
+            --certificate-identity-regexp "https://github.com/${{ github.repository }}.*" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            --type slsaprovenance1 \
+            "${IMAGE_REF}" \
+            | jq -r '.payload | @base64d | fromjson |
+                "✅ Provenance verified — builder: \(.predicate.runDetails.builder.id)"'
+
+      - name: Show full artefact tree (Phase 2 thesis evidence)
+        run: |
+          IMAGE_REF="${{ needs.build-and-push.outputs.image-ref }}"
+          echo "══════════════════════════════════════════════════════"
+          echo "  Phase 2 complete — cosign tree output"
+          echo "  Expected: signature + SBOM attestation + provenance"
+          echo "══════════════════════════════════════════════════════"
+          cosign tree "${IMAGE_REF}"
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # JOB 6 — SMOKE TEST
+  # Final gate — deploys to EKS to confirm end-to-end pipeline works.
+  # ───────────────────────────────────────────────────────────────────────────
+  smoke-test:
+    name: Smoke Test — EKS
+    runs-on: ubuntu-latest
+    needs: [verify-all]
+    environment: aws
+
+    steps:
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+          role-session-name: phase2-smoke-test
+
+      - name: Log in to ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Update kubeconfig for EKS
+        run: |
+          aws eks update-kubeconfig \
+            --region "${{ secrets.AWS_REGION }}" \
+            --name "${{ secrets.EKS_CLUSTER_NAME }}"
+
+      - name: Deploy ephemeral pod and verify
+        env:
+          FULL_IMAGE: ${{ needs.build-and-push.outputs.full-image }}
+        run: |
+          kubectl delete pod smoke-test --ignore-not-found
+          sleep 3
+
+          kubectl run smoke-test \
+            --image="${FULL_IMAGE}" \
+            --restart=Never \
+            --command -- sh -c 'echo "Phase 2 smoke test passed on EKS"'
+
+          sleep 15
+          kubectl get pod smoke-test -o wide
+          kubectl wait --for=jsonpath='{.status.phase}'=Succeeded \
+            pod/smoke-test --timeout=90s
+
+          kubectl logs smoke-test
+          kubectl delete pod smoke-test --ignore-not-found
+          echo "✅ Phase 2 complete — image signed, SBOM attested, provenance attested"
