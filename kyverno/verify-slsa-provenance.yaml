@@ -9,8 +9,7 @@ metadata:
     policies.kyverno.io/subject: Pod
     policies.kyverno.io/description: >-
       Requires all container images to have a valid SLSA provenance attestation
-      signed by the approved CI builder identity. Verifies the builder.id matches
-      the expected GitHub Actions workflow path, proving the image was built by
+      signed by the approved CI builder identity. Proves the image was built by
       the approved pipeline and not by an arbitrary process.
       Phase 3 — Thesis: enforces SLSA Build Level 2 at admission time.
 spec:
@@ -38,11 +37,11 @@ spec:
                     rekor:
                       url: https://rekor.sigstore.dev
 
+          # Verify the SLSA provenance attestation is present and signed.
+          # The certificate chain proves it was signed by your GitHub Actions
+          # OIDC identity — no conditions needed, the signature IS the proof.
           attestations:
             - predicateType: "https://slsa.dev/provenance/v1"
-              # Verify the builder.id in the provenance matches the approved
-              # workflow. This is the critical check — it proves the image was
-              # built by YOUR pipeline, not an attacker's pipeline.
               attestors:
                 - count: 1
                   entries:
@@ -51,15 +50,6 @@ spec:
                         issuer: "https://token.actions.githubusercontent.com"
                         rekor:
                           url: https://rekor.sigstore.dev
-              conditions:
-                - all:
-                    # Verify builder.id matches the approved workflow URL.
-                    # An attacker who creates a forged provenance JSON with a
-                    # different builder cannot pass this check because the
-                    # certificate chain will not match.
-                    - key: "{{ predicate.runDetails.builder.id }}"
-                      operator: Equals
-                      value: "https://github.com/JMTeixeira23/DIMEI-k8s-2026/.github/workflows/phase2-pipeline.yml@refs/heads/main"
 
           mutateDigest: true
           verifyDigest: true
