@@ -14,6 +14,10 @@ terraform {
       source  = "hashicorp/tls"
       version = "~> 4.0"
     }
+    kubernetes = {
+      source  = "hashicorp/kubernetes"
+      version = "~> 2.27"
+    }
   }
 
   # Uncomment to enable remote state (recommended before thesis submission)

@@ -179,6 +179,8 @@ jobs:
 
   # ───────────────────────────────────────────────────────────────────────────
   # JOB 4 — SLSA PROVENANCE
+  # Uses os.environ to pass shell variables into Python cleanly —
+  # avoids heredoc interpolation issues with GitHub Actions expressions.
   # ───────────────────────────────────────────────────────────────────────────
   provenance:
     name: Generate & Attest SLSA Provenance
@@ -208,41 +210,63 @@ jobs:
           name: image-ref
 
       - name: Generate SLSA v1.0 provenance predicate
+        env:
+          GH_REPOSITORY:  ${{ github.repository }}
+          GH_REF_NAME:    ${{ github.ref_name }}
+          GH_SHA:         ${{ github.sha }}
+          GH_EVENT:       ${{ github.event_name }}
+          GH_WORKFLOW:    ${{ github.workflow }}
+          GH_RUN_ID:      ${{ github.run_id }}
+          GH_RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           source image-ref.env
           BUILD_TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-          python3 << PYEOF
-          import json
+          # Pass all values via environment variables — clean, no interpolation issues
+          FULL_IMAGE="${FULL_IMAGE}" \
+          BUILD_TIMESTAMP="${BUILD_TIMESTAMP}" \
+          python3 - << 'PYEOF'
+          import json, os
+
+          repo        = os.environ["GH_REPOSITORY"]
+          ref_name    = os.environ["GH_REF_NAME"]
+          sha         = os.environ["GH_SHA"]
+          event       = os.environ["GH_EVENT"]
+          workflow    = os.environ["GH_WORKFLOW"]
+          run_id      = os.environ["GH_RUN_ID"]
+          run_attempt = os.environ["GH_RUN_ATTEMPT"]
+          full_image  = os.environ["FULL_IMAGE"]
+          timestamp   = os.environ["BUILD_TIMESTAMP"]
 
           provenance = {
             "buildDefinition": {
               "buildType": "https://slsa.dev/container-based-build/v0.1",
               "externalParameters": {
                 "source": {
-                  "uri": "git+https://github.com/${{ github.repository }}@refs/heads/${{ github.ref_name }}",
-                  "digest": {"gitCommit": "${{ github.sha }}"}
-                }
+                  "uri": f"git+https://github.com/{repo}@refs/heads/{ref_name}",
+                  "digest": {"gitCommit": sha}
+                },
+                "image": full_image
               },
               "internalParameters": {
-                "githubEventName":  "${{ github.event_name }}",
-                "githubWorkflow":   "${{ github.workflow }}",
-                "githubRunId":      "${{ github.run_id }}",
-                "githubRunAttempt": "${{ github.run_attempt }}"
+                "githubEventName":  event,
+                "githubWorkflow":   workflow,
+                "githubRunId":      run_id,
+                "githubRunAttempt": run_attempt
               },
               "resolvedDependencies": [{
-                "uri": "git+https://github.com/${{ github.repository }}@refs/heads/${{ github.ref_name }}",
-                "digest": {"gitCommit": "${{ github.sha }}"}
+                "uri": f"git+https://github.com/{repo}@refs/heads/{ref_name}",
+                "digest": {"gitCommit": sha}
               }]
             },
             "runDetails": {
               "builder": {
-                "id": "https://github.com/${{ github.repository }}/.github/workflows/phase2-pipeline.yml@refs/heads/${{ github.ref_name }}"
+                "id": f"https://github.com/{repo}/.github/workflows/phase2-pipeline.yml@refs/heads/{ref_name}"
               },
               "metadata": {
-                "invocationId": "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}",
-                "startedOn":  "${{ github.event.head_commit.timestamp }}",
-                "finishedOn": "${{ github.event.head_commit.timestamp }}"
+                "invocationId": f"https://github.com/{repo}/actions/runs/{run_id}/attempts/{run_attempt}",
+                "startedOn":  timestamp,
+                "finishedOn": timestamp
               }
             }
           }
@@ -251,7 +275,9 @@ jobs:
             json.dump(provenance, f, indent=2)
 
           print("✅ Provenance generated")
-          print(f"   Builder: {provenance['runDetails']['builder']['id']}")
+          print(f"   Builder  : {provenance['runDetails']['builder']['id']}")
+          print(f"   Commit   : {sha}")
+          print(f"   Timestamp: {timestamp}")
           PYEOF
 
       - name: Attach provenance as signed attestation
