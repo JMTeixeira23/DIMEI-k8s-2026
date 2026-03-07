@@ -9,13 +9,6 @@ on:
       - 'docker/**'
   workflow_dispatch:
 
-# ─────────────────────────────────────────────────────────────────────────────
-# OIDC permissions
-# id-token:write is what allows GitHub to mint a short-lived OIDC token.
-# This token is exchanged for AWS credentials via AssumeRoleWithWebIdentity.
-# No long-lived secrets are stored. When Azure is added, the same token is
-# exchanged for an Azure access token via Entra Workload Identity.
-# ─────────────────────────────────────────────────────────────────────────────
 permissions:
   id-token: write
   contents: read
@@ -25,9 +18,6 @@ env:
   IMAGE_TAG: ${{ github.sha }}
 
 jobs:
-  # ───────────────────────────────────────────────────────────────────────────
-  # BUILD — produces the image once; cloud-specific push jobs consume it
-  # ───────────────────────────────────────────────────────────────────────────
   build:
     name: Build Image
     runs-on: ubuntu-latest
@@ -59,16 +49,6 @@ jobs:
           path: /tmp/image.tar
           retention-days: 1
 
-  # ───────────────────────────────────────────────────────────────────────────
-  # AWS SMOKE TEST — ECR push → Cosign sign → verify → EKS deploy
-  #
-  # Future: an equivalent `smoke-test-azure` job goes here with:
-  #   - azure/login@v1 (OIDC, no secrets)
-  #   - az acr login
-  #   - same cosign sign/verify steps
-  #   - az aks get-credentials + kubectl run
-  # The sign/verify steps are identical between clouds — only registry auth differs.
-  # ───────────────────────────────────────────────────────────────────────────
   smoke-test-aws:
     name: Smoke Test — ECR + EKS
     runs-on: ubuntu-latest
@@ -79,7 +59,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Exchange GitHub OIDC token for temporary AWS credentials — no secrets stored
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -106,30 +85,21 @@ jobs:
           docker load --input /tmp/image.tar
           docker tag "${IMAGE_NAME}:${IMAGE_TAG}" "${FULL_IMAGE}"
           docker push "${FULL_IMAGE}"
-
-          # Capture digest so Cosign signs the exact image bytes, not just the tag.
-          # This avoids the ECR immutable tag conflict on re-runs (the .sig tag already
-          # exists for this digest, and immutable repos block overwriting it).
           DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "${FULL_IMAGE}")
           echo "FULL_IMAGE=${FULL_IMAGE}" >> $GITHUB_ENV
           echo "IMAGE_DIGEST=${DIGEST}" >> $GITHUB_ENV
-          echo "✅ Pushed : ${FULL_IMAGE}"
-          echo "✅ Digest : ${DIGEST}"
+          echo "Pushed : ${FULL_IMAGE}"
+          echo "Digest : ${DIGEST}"
 
       - name: Install Cosign
         uses: sigstore/cosign-installer@v3
         with:
           cosign-release: v2.2.3
 
-      # Keyless signing: Cosign obtains a Fulcio certificate for the GitHub
-      # Actions OIDC identity. The certificate and signature are recorded in
-      # the Sigstore transparency log (Rekor). No private key is stored anywhere.
-      # Signing by digest (not tag) is the correct approach — it binds the
-      # signature to the exact image bytes and avoids immutable tag conflicts.
       - name: Sign image (Cosign keyless, by digest)
         run: |
           cosign sign --yes "${IMAGE_DIGEST}"
-          echo "✅ Image signed"
+          echo "Image signed"
 
       - name: Verify signature
         run: |
@@ -137,11 +107,11 @@ jobs:
             --certificate-identity-regexp "https://github.com/${{ github.repository }}.*" \
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
             "${IMAGE_DIGEST}"
-          echo "✅ Signature verified"
+          echo "Signature verified"
 
       - name: Show artefacts in registry (cosign tree)
         run: |
-          echo "─── cosign tree output (Phase 2 will add SBOM + provenance here) ───"
+          echo "--- cosign tree output (Phase 2 will add SBOM + provenance here) ---"
           cosign tree "${IMAGE_DIGEST}"
 
       - name: Update kubeconfig for EKS
@@ -152,12 +122,19 @@ jobs:
 
       - name: Smoke test — deploy ephemeral pod and confirm execution
         run: |
-          # Use the tag for the pod image reference (EKS pulls by tag from ECR)
           kubectl run smoke-test \
             --image="${FULL_IMAGE}" \
             --restart=Never \
             --command -- sh -c 'echo "Phase 1 smoke test passed on EKS"'
+
+          sleep 15
+          echo "--- Pod status ---"
+          kubectl get pod smoke-test -o wide
+          echo "--- Pod events (look for image pull errors here) ---"
+          kubectl describe pod smoke-test | grep -A 20 "Events:"
+
           kubectl wait --for=condition=Succeeded pod/smoke-test --timeout=90s
+          echo "--- Pod logs ---"
           kubectl logs smoke-test
-          kubectl delete pod smoke-test
-          echo "✅ Smoke test complete"
+          kubectl delete pod smoke-test --ignore-not-found
+          echo "Smoke test complete"
