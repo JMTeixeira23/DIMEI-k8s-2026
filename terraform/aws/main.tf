@@ -310,3 +310,16 @@ resource "helm_release" "kyverno" {
 
   depends_on = [aws_eks_node_group.main]
 }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GITHUB ACTIONS OIDC PROVIDER
+# This is separate from the EKS cluster OIDC provider above.
+# EKS OIDC  = lets pods inside the cluster assume IAM roles (IRSA)
+# GitHub OIDC = lets GitHub Actions workflows assume IAM roles (no secrets)
+# ─────────────────────────────────────────────────────────────────────────────
+resource "aws_iam_openid_connect_provider" "github_actions" {
+  url             = "https://token.actions.githubusercontent.com"
+  client_id_list  = ["sts.amazonaws.com"]
+  thumbprint_list = ["6938fd4d98bab03faadb97b34396831e3780aea1"]
+  tags            = { Name = "github-actions-oidc" }
+}
