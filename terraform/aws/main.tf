@@ -323,3 +323,27 @@ resource "aws_iam_openid_connect_provider" "github_actions" {
   thumbprint_list = ["6938fd4d98bab03faadb97b34396831e3780aea1"]
   tags            = { Name = "github-actions-oidc" }
 }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# EKS ACCESS ENTRY — GitHub Actions
+# EKS 1.29 uses access entries instead of the legacy aws-auth ConfigMap.
+# This grants the CI role admin access to the cluster for smoke tests and
+# future kubectl operations in Phase 3-5.
+# ─────────────────────────────────────────────────────────────────────────────
+resource "aws_eks_access_entry" "github_actions" {
+  cluster_name  = aws_eks_cluster.main.name
+  principal_arn = aws_iam_role.github_actions.arn
+  type          = "STANDARD"
+}
+
+resource "aws_eks_access_policy_association" "github_actions_admin" {
+  cluster_name  = aws_eks_cluster.main.name
+  principal_arn = aws_iam_role.github_actions.arn
+  policy_arn    = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
+
+  access_scope {
+    type = "cluster"
+  }
+
+  depends_on = [aws_eks_access_entry.github_actions]
+}
