@@ -118,11 +118,34 @@ jobs:
           ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
           ECR_REPO: ${{ secrets.ECR_REPO_NAME }}
         run: |
+          # Cosign pushes .sig and .att tags alongside the real image.
+          # We must filter those out and find the latest actual image tag
+          # (which is always sha-runid format, never containing a dot).
           LATEST_TAG=$(aws ecr describe-images \
             --repository-name "${ECR_REPO}" \
             --region "${{ secrets.AWS_REGION }}" \
-            --query 'sort_by(imageDetails,& imagePushedAt)[-1].imageTags[0]' \
-            --output text)
+            --output json \
+            | jq -r '
+                .imageDetails
+                | map(select(.imageTags != null))
+                | map(select(
+                    .imageTags[] | test("^sha256") | not
+                  ))
+                | sort_by(.imagePushedAt)
+                | last
+                | .imageTags[0]
+              ')
+
+          echo "Latest real image tag: ${LATEST_TAG}"
+
+          if [ -z "${LATEST_TAG}" ] || [ "${LATEST_TAG}" = "null" ]; then
+            echo "ERROR: could not find a real image tag in ECR"
+            aws ecr describe-images \
+              --repository-name "${ECR_REPO}" \
+              --region "${{ secrets.AWS_REGION }}" \
+              --output json | jq '.imageDetails[].imageTags'
+            exit 1
+          fi
 
           SIGNED_IMAGE="${ECR_REGISTRY}/${ECR_REPO}:${LATEST_TAG}"
           echo "SIGNED_IMAGE=${SIGNED_IMAGE}" >> $GITHUB_ENV
