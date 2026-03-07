@@ -37,9 +37,6 @@ spec:
                     rekor:
                       url: https://rekor.sigstore.dev
 
-          # Verify the SLSA provenance attestation is present and signed.
-          # The certificate chain proves it was signed by your GitHub Actions
-          # OIDC identity — no conditions needed, the signature IS the proof.
           attestations:
             - predicateType: "https://slsa.dev/provenance/v1"
               attestors:

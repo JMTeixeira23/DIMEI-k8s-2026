@@ -1,23 +1,23 @@
 apiVersion: kyverno.io/v1
 kind: ClusterPolicy
 metadata:
-  name: verify-slsa-provenance
+  name: verify-sbom-cyclonedx
   annotations:
-    policies.kyverno.io/title: Verify SLSA Provenance Attestation
+    policies.kyverno.io/title: Verify CycloneDX SBOM Attestation
     policies.kyverno.io/category: Supply Chain Security
     policies.kyverno.io/severity: high
     policies.kyverno.io/subject: Pod
     policies.kyverno.io/description: >-
-      Requires all container images to have a valid SLSA provenance attestation
-      signed by the approved CI builder identity. Proves the image was built by
-      the approved pipeline and not by an arbitrary process.
-      Phase 3 — Thesis: enforces SLSA Build Level 2 at admission time.
+      Requires all container images to have a valid CycloneDX SBOM attestation
+      signed by the approved CI identity. Ensures every deployed image has a
+      documented and verifiable software bill of materials.
+      Phase 3 — Thesis: enforces SBOM presence at admission time.
 spec:
   validationFailureAction: Enforce
   background: true
 
   rules:
-    - name: check-slsa-provenance
+    - name: check-sbom-cyclonedx
       match:
         any:
           - resources:
@@ -37,11 +37,8 @@ spec:
                     rekor:
                       url: https://rekor.sigstore.dev
 
-          # Verify the SLSA provenance attestation is present and signed.
-          # The certificate chain proves it was signed by your GitHub Actions
-          # OIDC identity — no conditions needed, the signature IS the proof.
           attestations:
-            - predicateType: "https://slsa.dev/provenance/v1"
+            - predicateType: "https://cyclonedx.org/bom"
               attestors:
                 - count: 1
                   entries:
