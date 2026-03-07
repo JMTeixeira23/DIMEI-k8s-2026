@@ -38,7 +38,7 @@ spec:
                       url: https://rekor.sigstore.dev
 
           attestations:
-            - predicateType: "https://slsa.dev/provenance/v1"
+            - type: "https://slsa.dev/provenance/v1"
               attestors:
                 - count: 1
                   entries:
