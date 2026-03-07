@@ -116,6 +116,11 @@ resource "aws_eks_cluster" "main" {
   # API and audit logs — useful for Phase 5 attack detection evidence
   enabled_cluster_log_types = ["api", "audit", "authenticator"]
 
+  access_config {
+    authentication_mode                         = "API_AND_CONFIG_MAP"
+    bootstrap_cluster_creator_admin_permissions = true
+  }
+
   depends_on = [aws_iam_role_policy_attachment.eks_cluster_policy]
 }
 
