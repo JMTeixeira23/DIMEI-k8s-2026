@@ -121,6 +121,10 @@ jobs:
 
       - name: Smoke test — deploy ephemeral pod and confirm execution
         run: |
+          # Delete any leftover pod and wait until fully gone before creating new one
+          kubectl delete pod smoke-test --ignore-not-found
+          kubectl wait pod/smoke-test --for=delete --timeout=60s 2>/dev/null || true
+
           kubectl run smoke-test \
             --image="${FULL_IMAGE}" \
             --restart=Never \
