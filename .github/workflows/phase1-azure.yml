@@ -118,3 +118,9 @@ jobs:
           fi
 
           kubectl delete pod smoke-test --ignore-not-found
+
+  call-phase2:
+    name: Trigger Phase 2 Azure (Sign + SBOM + Provenance)
+    needs: build-sign-deploy
+    uses: ./.github/workflows/phase2-azure.yml
+    secrets: inherit

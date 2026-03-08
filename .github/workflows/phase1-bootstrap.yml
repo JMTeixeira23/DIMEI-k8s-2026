@@ -156,3 +156,9 @@ jobs:
           kubectl logs smoke-test || true
           kubectl delete pod smoke-test --ignore-not-found
           echo "Smoke test complete"
+
+  call-phase2:
+    name: Trigger Phase 2 (Sign + SBOM + Provenance)
+    needs: smoke-test-aws      # only after smoke test passes
+    uses: ./.github/workflows/phase2-pipeline.yml
+    secrets: inherit
