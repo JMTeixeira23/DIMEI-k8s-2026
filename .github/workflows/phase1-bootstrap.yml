@@ -132,8 +132,23 @@ jobs:
           echo "--- Pod events (look for image pull errors here) ---"
           kubectl describe pod smoke-test | grep -A 20 "Events:"
 
-          kubectl wait --for=condition=Succeeded pod/smoke-test --timeout=90s
-          echo "--- Pod logs ---"
-          kubectl logs smoke-test
+          # Pod may already be Completed before wait runs — poll phase directly
+          for i in $(seq 1 30); do
+            PHASE=$(kubectl get pod smoke-test \
+              -o jsonpath='{.status.phase}' 2>/dev/null || echo "Pending")
+            echo "  pod phase: ${PHASE}"
+            if [ "${PHASE}" = "Succeeded" ]; then
+              echo "✅ Smoke test passed"
+              break
+            elif [ "${PHASE}" = "Failed" ]; then
+              echo "❌ Smoke test failed"
+              kubectl logs smoke-test || true
+              exit 1
+            fi
+            [ "${i}" = "30" ] && echo "❌ Timed out" && exit 1
+            sleep 3
+          done
+
+          kubectl logs smoke-test || true
           kubectl delete pod smoke-test --ignore-not-found
           echo "Smoke test complete"
