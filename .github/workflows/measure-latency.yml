@@ -359,8 +359,6 @@ jobs:
     environment: ${{ matrix.cloud }}
     needs: measure
 
-    if: inputs.cloud == 'both' || inputs.cloud == matrix.cloud
-
     strategy:
       fail-fast: false
       matrix:
@@ -476,8 +474,6 @@ jobs:
     environment: ${{ matrix.cloud }}
     needs: build-size-images
 
-    if: inputs.cloud == 'both' || inputs.cloud == matrix.cloud
-
     strategy:
       fail-fast: false
       matrix:
@@ -486,6 +482,15 @@ jobs:
           - cloud: azure
 
     steps:
+      - name: Check cloud selection
+        run: |
+          SELECTED="${{ inputs.cloud }}"
+          THIS="${{ matrix.cloud }}"
+          if [ "${SELECTED}" != "both" ] && [ "${SELECTED}" != "${THIS}" ]; then
+            echo "Skipping ${THIS} — selected: ${SELECTED}"
+            exit 0
+          fi
+
       - name: Auth — AWS
         if: matrix.cloud == 'aws'
         uses: aws-actions/configure-aws-credentials@v4
