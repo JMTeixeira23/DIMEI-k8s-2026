@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
     paths:
-      - 'kyverno/azure/**'      # policy change → re-apply immediately
+      - 'kyverno/azure/**'
   workflow_dispatch:
     inputs:
       mode:
@@ -13,16 +13,13 @@ on:
         default: 'Enforce'
         type: choice
         options: [Audit, Enforce]
-  workflow_call:                # triggered by Phase 2 Azure after new image is attested
+  workflow_call:
     inputs:
       mode:
         description: 'Policy enforcement mode'
         required: false
         default: 'Enforce'
         type: string
-        default: "Enforce"
-        type: choice
-        options: [Audit, Enforce]
 
 permissions:
   id-token: write
