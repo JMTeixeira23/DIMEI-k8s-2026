@@ -22,7 +22,7 @@ spec:
         any:
           - resources:
               kinds: [Pod]
-              namespaces: ["default", "supply-chain-demo"]
+              namespaces: ["supply-chain-demo"]
 
       verifyImages:
         - imageReferences:
