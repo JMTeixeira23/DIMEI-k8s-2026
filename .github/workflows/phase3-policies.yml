@@ -11,6 +11,9 @@ on:
       mode:
         description: 'Policy validation failure action'
         required: true
+        default: 'Enforce'
+        type: choice
+        options: [Audit, Enforce]
   workflow_call:                # triggered by Phase 2 after new image is attested
     inputs:
       mode:
@@ -18,9 +21,6 @@ on:
         required: false
         default: 'Enforce'
         type: string
-        default: 'Audit'
-        type: choice
-        options: [Audit, Enforce]
 
 permissions:
   id-token: write

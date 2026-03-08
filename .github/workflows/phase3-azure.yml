@@ -8,8 +8,11 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "Policy enforcement mode"
+        description: 'Policy enforcement mode'
         required: true
+        default: 'Enforce'
+        type: choice
+        options: [Audit, Enforce]
   workflow_call:                # triggered by Phase 2 Azure after new image is attested
     inputs:
       mode:
