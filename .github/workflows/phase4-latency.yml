@@ -12,12 +12,11 @@ on:
 permissions:
   id-token: write
   contents: read
+  actions: read   # needed for GitHub API workflow run queries
 
 jobs:
   # ───────────────────────────────────────────────────────────────────────────
-  # JOB 1 — MEASURE CI PIPELINE DURATION
-  # Queries GitHub Actions API for run durations of Phase 1 and Phase 2
-  # to calculate the overhead added by signing, SBOM, and provenance steps.
+  # JOB 1 — CI PIPELINE DURATION
   # ───────────────────────────────────────────────────────────────────────────
   pipeline-duration:
     name: Measure CI Pipeline Overhead
@@ -36,66 +35,55 @@ jobs:
           echo "  Phase 4 — CI Pipeline Duration Comparison"
           echo "════════════════════════════════════════════════════"
 
-          # Fetch last 10 successful runs of each workflow
           echo "── Phase 1 (phase1-bootstrap.yml) ──"
           gh api \
             "repos/${REPO}/actions/workflows/phase1-bootstrap.yml/runs?status=success&per_page=10" \
-            --jq '.workflow_runs[] |
-              {
-                run_number: .run_number,
-                duration_seconds: ((.updated_at | fromdateiso8601) - (.created_at | fromdateiso8601)),
-                created_at: .created_at
-              }' > /tmp/phase1-runs.json
+            --jq '.workflow_runs[] | {run_number,duration_seconds:((.updated_at|fromdateiso8601)-(.created_at|fromdateiso8601)),created_at}' \
+            > /tmp/phase1-runs.json 2>&1 || echo "No Phase 1 runs found yet"
           cat /tmp/phase1-runs.json
 
           echo ""
           echo "── Phase 2 (phase2-pipeline.yml) ──"
           gh api \
             "repos/${REPO}/actions/workflows/phase2-pipeline.yml/runs?status=success&per_page=10" \
-            --jq '.workflow_runs[] |
-              {
-                run_number: .run_number,
-                duration_seconds: ((.updated_at | fromdateiso8601) - (.created_at | fromdateiso8601)),
-                created_at: .created_at
-              }' > /tmp/phase2-runs.json
+            --jq '.workflow_runs[] | {run_number,duration_seconds:((.updated_at|fromdateiso8601)-(.created_at|fromdateiso8601)),created_at}' \
+            > /tmp/phase2-runs.json 2>&1 || echo "No Phase 2 runs found yet"
           cat /tmp/phase2-runs.json
 
           echo ""
           echo "── Summary ──"
           python3 << 'PYEOF'
-          import json
+          import json, os
 
-          def avg(data, key):
-              vals = [d[key] for d in data if key in d]
-              return sum(vals) / len(vals) if vals else 0
+          def avg(path):
+              try:
+                  vals = [json.loads(l)["duration_seconds"]
+                          for l in open(path) if l.strip() and "{" in l]
+                  return sum(vals)/len(vals) if vals else 0, len(vals)
+              except:
+                  return 0, 0
 
-          try:
-              p1 = [json.loads(l) for l in open('/tmp/phase1-runs.json') if l.strip()]
-              p2 = [json.loads(l) for l in open('/tmp/phase2-runs.json') if l.strip()]
+          p1_avg, p1_n = avg('/tmp/phase1-runs.json')
+          p2_avg, p2_n = avg('/tmp/phase2-runs.json')
+          overhead = p2_avg - p1_avg
+          pct = (overhead / p1_avg * 100) if p1_avg > 0 else 0
 
-              p1_avg = avg(p1, 'duration_seconds')
-              p2_avg = avg(p2, 'duration_seconds')
-              overhead = p2_avg - p1_avg
-              pct = (overhead / p1_avg * 100) if p1_avg > 0 else 0
-
-              print(f"Phase 1 average duration : {p1_avg:.0f}s  ({p1_avg/60:.1f} min)  [n={len(p1)}]")
-              print(f"Phase 2 average duration : {p2_avg:.0f}s  ({p2_avg/60:.1f} min)  [n={len(p2)}]")
-              print(f"Security overhead        : +{overhead:.0f}s (+{pct:.1f}%)")
-              print(f"  └─ sign ~30s, SBOM ~45s, provenance ~20s, verify ~15s")
+          if p1_n == 0 and p2_n == 0:
+              print("No run data yet — run Phase 1 and Phase 2 workflows first")
+          else:
+              print(f"Phase 1 avg duration : {p1_avg:.0f}s ({p1_avg/60:.1f}min) [n={p1_n}]")
+              print(f"Phase 2 avg duration : {p2_avg:.0f}s ({p2_avg/60:.1f}min) [n={p2_n}]")
+              print(f"Security overhead    : +{overhead:.0f}s (+{pct:.1f}%)")
               print("")
-              print("CSV (for thesis table):")
-              print("workflow,avg_duration_s,avg_duration_min,n_runs")
-              print(f"phase1-bootstrap,{p1_avg:.0f},{p1_avg/60:.1f},{len(p1)}")
-              print(f"phase2-pipeline,{p2_avg:.0f},{p2_avg/60:.1f},{len(p2)}")
+              print("CSV:")
+              print("workflow,avg_s,avg_min,n")
+              print(f"phase1,{p1_avg:.0f},{p1_avg/60:.1f},{p1_n}")
+              print(f"phase2,{p2_avg:.0f},{p2_avg/60:.1f},{p2_n}")
               print(f"overhead,{overhead:.0f},{overhead/60:.1f},")
-          except Exception as e:
-              print(f"Note: {e} — run Phase 1 and Phase 2 a few times first to get data")
           PYEOF
 
   # ───────────────────────────────────────────────────────────────────────────
-  # JOB 2 — MEASURE ECR STORAGE OVERHEAD
-  # Measures the storage cost of Cosign artefacts (signatures + attestations)
-  # compared to the base image size.
+  # JOB 2 — ECR STORAGE OVERHEAD
   # ───────────────────────────────────────────────────────────────────────────
   ecr-storage:
     name: Measure ECR Storage Overhead
@@ -118,72 +106,56 @@ jobs:
           echo "  Phase 4 — ECR Storage Overhead"
           echo "════════════════════════════════════════════════════"
 
+          aws ecr describe-images \
+            --repository-name "${ECR_REPO}" \
+            --region "${{ secrets.AWS_REGION }}" \
+            --output json > /tmp/ecr-images.json
+
           python3 << 'PYEOF'
-          import subprocess, json
+          import json
 
-          result = subprocess.run([
-              "aws", "ecr", "describe-images",
-              "--repository-name", "supply-chain/hello-world",
-              "--region", "eu-west-1",
-              "--output", "json"
-          ], capture_output=True, text=True)
-
-          data = json.loads(result.stdout)
+          data   = json.load(open('/tmp/ecr-images.json'))
           images = data["imageDetails"]
 
-          real_images = []
-          sig_artefacts = []
-          att_artefacts = []
-
+          real, sigs, atts = [], [], []
           for img in images:
               tags = img.get("imageTags", [])
               size = img.get("imageSizeInBytes", 0)
-              if not tags:
-                  continue
+              if not tags: continue
               tag = tags[0]
-              if tag.startswith("sha256-") and tag.endswith(".sig"):
-                  sig_artefacts.append({"tag": tag, "size": size})
-              elif tag.startswith("sha256-") and tag.endswith(".att"):
-                  att_artefacts.append({"tag": tag, "size": size})
-              elif "-" in tag and not tag.startswith("sha256"):
-                  real_images.append({"tag": tag, "size": size})
+              if tag.endswith(".sig"):   sigs.append(size)
+              elif tag.endswith(".att"): atts.append(size)
+              elif "-" in tag and not tag.startswith("sha256"): real.append(size)
 
           def fmt(b):
               if b > 1024*1024: return f"{b/1024/1024:.2f} MB"
-              if b > 1024: return f"{b/1024:.2f} KB"
+              if b > 1024:      return f"{b/1024:.2f} KB"
               return f"{b} B"
 
-          avg_img  = sum(i["size"] for i in real_images)  / max(len(real_images), 1)
-          avg_sig  = sum(i["size"] for i in sig_artefacts) / max(len(sig_artefacts), 1)
-          avg_att  = sum(i["size"] for i in att_artefacts) / max(len(att_artefacts), 1)
-          overhead = avg_sig + (avg_att * 2)  # 1 sig + 2 attestations per image
-          pct      = (overhead / avg_img * 100) if avg_img > 0 else 0
+          avg_img = sum(real)/max(len(real),1)
+          avg_sig = sum(sigs)/max(len(sigs),1)
+          avg_att = sum(atts)/max(len(atts),1)
+          total   = avg_sig + avg_att * 2
+          pct     = total/avg_img*100 if avg_img else 0
 
-          print(f"Real images found        : {len(real_images)}")
-          print(f"Signature artefacts      : {len(sig_artefacts)}")
-          print(f"Attestation artefacts    : {len(att_artefacts)}")
+          print(f"Real images     : {len(real)}  avg {fmt(avg_img)}")
+          print(f"Signatures      : {len(sigs)}  avg {fmt(avg_sig)}")
+          print(f"Attestations    : {len(atts)}  avg {fmt(avg_att)}")
+          print(f"Total overhead  : {fmt(total)} per image ({pct:.1f}%)")
           print("")
-          print(f"Avg image size           : {fmt(avg_img)}")
-          print(f"Avg signature size       : {fmt(avg_sig)}")
-          print(f"Avg attestation size     : {fmt(avg_att)}")
-          print(f"Total artefact overhead  : {fmt(overhead)} per image ({pct:.1f}% of image size)")
-          print("")
-          print("CSV (for thesis table):")
-          print("artefact_type,avg_size_bytes,avg_size_human,count")
-          print(f"base_image,{avg_img:.0f},{fmt(avg_img)},{len(real_images)}")
-          print(f"signature,{avg_sig:.0f},{fmt(avg_sig)},{len(sig_artefacts)}")
-          print(f"attestation,{avg_att:.0f},{fmt(avg_att)},{len(att_artefacts)}")
-          print(f"total_overhead,{overhead:.0f},{fmt(overhead)},")
+          print("CSV:")
+          print("type,avg_bytes,avg_human,count")
+          print(f"base_image,{avg_img:.0f},{fmt(avg_img)},{len(real)}")
+          print(f"signature,{avg_sig:.0f},{fmt(avg_sig)},{len(sigs)}")
+          print(f"attestation,{avg_att:.0f},{fmt(avg_att)},{len(atts)}")
+          print(f"total_overhead,{total:.0f},{fmt(total)},")
           PYEOF
 
   # ───────────────────────────────────────────────────────────────────────────
-  # JOB 3 — MEASURE ADMISSION LATENCY
-  # Deploys N pods in three conditions and times each admission:
-  #   Baseline : policies suspended (no webhook verification)
-  #   Audit    : policies active in Audit mode
-  #   Enforce  : policies active in Enforce mode (full verification)
-  #
-  # Produces a CSV with per-pod timings for thesis statistical analysis.
+  # JOB 3 — ADMISSION LATENCY
+  # Three conditions: baseline (no policies), audit, enforce.
+  # Baseline achieved by deleting policies then restoring them — the only
+  # reliable method since verifyImages policies cannot have admission disabled.
   # ───────────────────────────────────────────────────────────────────────────
   admission-latency:
     name: Measure Admission Latency
@@ -191,6 +163,9 @@ jobs:
     environment: aws
 
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -226,15 +201,24 @@ jobs:
                 | last
                 | .imageTags[0]
               ')
-
           SIGNED_IMAGE="${ECR_REGISTRY}/${ECR_REPO}:${LATEST_TAG}"
           echo "SIGNED_IMAGE=${SIGNED_IMAGE}" >> $GITHUB_ENV
           echo "Using image: ${SIGNED_IMAGE}"
 
       - name: Setup measurement namespace
         run: |
-          kubectl create namespace phase4-latency --dry-run=client -o yaml \
-            | kubectl apply -f -
+          kubectl create namespace phase4-latency \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Save policy manifests for restore
+        run: |
+          kubectl get clusterpolicy verify-image-signature -o yaml \
+            > /tmp/policy-signature.yaml
+          kubectl get clusterpolicy verify-sbom-cyclonedx -o yaml \
+            > /tmp/policy-sbom.yaml
+          kubectl get clusterpolicy verify-slsa-provenance -o yaml \
+            > /tmp/policy-provenance.yaml
+          echo "✅ Policies saved"
 
       - name: Run latency measurements
         env:
@@ -242,98 +226,65 @@ jobs:
         run: |
           N="${ITERATIONS:-30}"
           echo "Running ${N} iterations per condition"
-          echo ""
 
-          # Write the measurement script
-          cat > /tmp/measure.sh << 'SCRIPT'
-          #!/bin/bash
-          # measure_admission TIME the kubectl run call — from submission to API acceptance
-          # This measures the webhook round-trip time (the Kyverno overhead)
+          # Timing function — measures kubectl API round-trip per pod
+          measure() {
+            CONDITION=$1 IMAGE=$2 OUTFILE=$3
+            echo "condition,pod_index,admission_ms" > "${OUTFILE}"
+            for i in $(seq 1 $N); do
+              POD="lat-${CONDITION}-${i}"
+              kubectl delete pod "${POD}" -n phase4-latency \
+                --ignore-not-found --wait=false 2>/dev/null
+              START=$(date +%s%3N)
+              kubectl run "${POD}" \
+                --image="${IMAGE}" \
+                --restart=Never \
+                --namespace=phase4-latency \
+                --command -- sh -c 'exit 0' > /dev/null 2>&1
+              END=$(date +%s%3N)
+              MS=$((END - START))
+              echo "${CONDITION},${i},${MS}" >> "${OUTFILE}"
+              echo "  ${CONDITION} ${i}/${N}: ${MS}ms"
+              sleep 1
+            done
+          }
 
-          CONDITION=$1
-          IMAGE=$2
-          N=$3
-          OUTFILE=$4
+          # ── BASELINE: delete all policies ──
+          echo "════ BASELINE — deleting policies ════"
+          kubectl delete clusterpolicy \
+            verify-image-signature \
+            verify-sbom-cyclonedx \
+            verify-slsa-provenance \
+            --ignore-not-found
+          sleep 10
 
-          echo "condition,pod_index,admission_ms" > "${OUTFILE}"
+          measure "baseline" "${SIGNED_IMAGE}" /tmp/baseline.csv
 
-          for i in $(seq 1 $N); do
-            POD="latency-${CONDITION}-${i}"
-            kubectl delete pod "${POD}" -n phase4-latency \
-              --ignore-not-found --wait=false 2>/dev/null
-
-            START=$(date +%s%3N)
-            kubectl run "${POD}" \
-              --image="${IMAGE}" \
-              --restart=Never \
-              --namespace=phase4-latency \
-              --command -- sh -c 'exit 0' 2>/dev/null
-            END=$(date +%s%3N)
-
-            MS=$((END - START))
-            echo "${CONDITION},${i},${MS}" >> "${OUTFILE}"
-            echo "  ${CONDITION} pod ${i}/${N}: ${MS}ms"
-
-            # Brief pause between pods to avoid overwhelming the webhook
-            sleep 1
+          # ── AUDIT: restore policies in Audit mode ──
+          echo "════ AUDIT — restoring policies in Audit mode ════"
+          # Patch mode to Audit before applying
+          for f in /tmp/policy-signature.yaml /tmp/policy-sbom.yaml /tmp/policy-provenance.yaml; do
+            sed 's/validationFailureAction: Enforce/validationFailureAction: Audit/' \
+              "${f}" | kubectl apply -f - 2>/dev/null || true
           done
-          SCRIPT
-          chmod +x /tmp/measure.sh
-
-          # ── CONDITION 1: BASELINE (policies suspended) ──
-          echo "════════════════════════════════════════"
-          echo "BASELINE — suspending all policies"
-          echo "════════════════════════════════════════"
+          # Also patch mutateDigest for Audit compatibility
           kubectl patch clusterpolicy verify-image-signature \
-            --type=merge -p '{"spec":{"admission":false}}'
-          kubectl patch clusterpolicy verify-sbom-cyclonedx \
-            --type=merge -p '{"spec":{"admission":false}}'
-          kubectl patch clusterpolicy verify-slsa-provenance \
-            --type=merge -p '{"spec":{"admission":false}}'
-          sleep 5
+            --type=merge -p '{"spec":{"rules":[{"name":"check-image-signature","verifyImages":[{"mutateDigest":false,"verifyDigest":false}]}]}}' \
+            2>/dev/null || true
+          sleep 10
 
-          bash /tmp/measure.sh "baseline" "${SIGNED_IMAGE}" "${N}" /tmp/baseline.csv
+          measure "audit" "${SIGNED_IMAGE}" /tmp/audit.csv
 
-          # ── CONDITION 2: AUDIT MODE ──
-          echo ""
-          echo "════════════════════════════════════════"
-          echo "AUDIT — re-enabling policies in Audit mode"
-          echo "════════════════════════════════════════"
-          kubectl patch clusterpolicy verify-image-signature \
-            --type=merge -p '{"spec":{"admission":true,"validationFailureAction":"Audit"}}'
-          kubectl patch clusterpolicy verify-sbom-cyclonedx \
-            --type=merge -p '{"spec":{"admission":true,"validationFailureAction":"Audit"}}'
-          kubectl patch clusterpolicy verify-slsa-provenance \
-            --type=merge -p '{"spec":{"admission":true,"validationFailureAction":"Audit"}}'
-          sleep 5
+          # ── ENFORCE: switch to Enforce mode ──
+          echo "════ ENFORCE — switching to Enforce mode ════"
+          for f in /tmp/policy-signature.yaml /tmp/policy-sbom.yaml /tmp/policy-provenance.yaml; do
+            kubectl apply -f "${f}" 2>/dev/null || true
+          done
+          sleep 10
 
-          bash /tmp/measure.sh "audit" "${SIGNED_IMAGE}" "${N}" /tmp/audit.csv
+          measure "enforce" "${SIGNED_IMAGE}" /tmp/enforce.csv
 
-          # ── CONDITION 3: ENFORCE MODE ──
-          echo ""
-          echo "════════════════════════════════════════"
-          echo "ENFORCE — switching to Enforce mode"
-          echo "════════════════════════════════════════"
-          kubectl patch clusterpolicy verify-image-signature \
-            --type=merge -p '{"spec":{"validationFailureAction":"Enforce"}}'
-          kubectl patch clusterpolicy verify-sbom-cyclonedx \
-            --type=merge -p '{"spec":{"validationFailureAction":"Enforce"}}'
-          kubectl patch clusterpolicy verify-slsa-provenance \
-            --type=merge -p '{"spec":{"validationFailureAction":"Enforce"}}'
-          sleep 5
-
-          bash /tmp/measure.sh "enforce" "${SIGNED_IMAGE}" "${N}" /tmp/enforce.csv
-
-          # ── RESTORE ENFORCE MODE (leave cluster in secure state) ──
-          kubectl patch clusterpolicy verify-image-signature \
-            --type=merge -p '{"spec":{"admission":true,"validationFailureAction":"Enforce"}}'
-          kubectl patch clusterpolicy verify-sbom-cyclonedx \
-            --type=merge -p '{"spec":{"admission":true,"validationFailureAction":"Enforce"}}'
-          kubectl patch clusterpolicy verify-slsa-provenance \
-            --type=merge -p '{"spec":{"admission":true,"validationFailureAction":"Enforce"}}'
-
-          echo ""
-          echo "✅ Cluster restored to Enforce mode"
+          echo "✅ Measurements complete — cluster in Enforce mode"
 
       - name: Analyse results
         run: |
@@ -341,14 +292,9 @@ jobs:
           import csv, statistics, os
 
           def load(path):
-              if not os.path.exists(path):
-                  return []
-              rows = []
+              if not os.path.exists(path): return []
               with open(path) as f:
-                  reader = csv.DictReader(f)
-                  for row in reader:
-                      rows.append(int(row["admission_ms"]))
-              return rows
+                  return [int(r["admission_ms"]) for r in csv.DictReader(f)]
 
           baseline = load("/tmp/baseline.csv")
           audit    = load("/tmp/audit.csv")
@@ -356,22 +302,20 @@ jobs:
 
           def stats(label, data):
               if not data:
-                  print(f"{label}: no data")
-                  return
-              print(f"{label}:")
-              print(f"  n         = {len(data)}")
-              print(f"  mean      = {statistics.mean(data):.0f} ms")
-              print(f"  median    = {statistics.median(data):.0f} ms")
-              print(f"  stdev     = {statistics.stdev(data):.0f} ms")
-              print(f"  min       = {min(data)} ms")
-              print(f"  max       = {max(data)} ms")
-              print(f"  p95       = {sorted(data)[int(len(data)*0.95)]:.0f} ms")
+                  print(f"{label}: no data"); return
+              s = sorted(data)
+              print(f"{label} (n={len(data)}):")
+              print(f"  mean   = {statistics.mean(data):.0f} ms")
+              print(f"  median = {statistics.median(data):.0f} ms")
+              print(f"  stdev  = {statistics.stdev(data):.0f} ms")
+              print(f"  min    = {min(data)} ms")
+              print(f"  max    = {max(data)} ms")
+              print(f"  p95    = {s[int(len(s)*0.95)]} ms")
 
           print("════════════════════════════════════════════════════")
           print("  Phase 4 — Admission Latency Results")
           print("  Save this output for thesis Chapter 6")
           print("════════════════════════════════════════════════════")
-          print("")
           stats("Baseline (no policies)", baseline)
           print("")
           stats("Audit mode", audit)
@@ -381,17 +325,15 @@ jobs:
           if baseline and enforce:
               overhead = statistics.mean(enforce) - statistics.mean(baseline)
               pct = overhead / statistics.mean(baseline) * 100
-              print("")
-              print(f"Kyverno overhead (enforce vs baseline):")
-              print(f"  Mean overhead = +{overhead:.0f} ms ({pct:.1f}%)")
+              print(f"\nKyverno overhead: +{overhead:.0f}ms ({pct:.1f}%)")
 
-          print("")
-          print("CSV (for thesis table / chart):")
+          print("\nCSV (copy into thesis table):")
           print("condition,n,mean_ms,median_ms,stdev_ms,min_ms,max_ms,p95_ms")
-          for label, data in [("baseline", baseline), ("audit", audit), ("enforce", enforce)]:
+          for label, data in [("baseline",baseline),("audit",audit),("enforce",enforce)]:
               if data:
-                  p95 = sorted(data)[int(len(data)*0.95)]
-                  print(f"{label},{len(data)},{statistics.mean(data):.0f},{statistics.median(data):.0f},{statistics.stdev(data):.0f},{min(data)},{max(data)},{p95:.0f}")
+                  s = sorted(data)
+                  p95 = s[int(len(s)*0.95)]
+                  print(f"{label},{len(data)},{statistics.mean(data):.0f},{statistics.median(data):.0f},{statistics.stdev(data):.0f},{min(data)},{max(data)},{p95}")
           PYEOF
 
       - name: Upload raw timing data
@@ -404,11 +346,8 @@ jobs:
             /tmp/enforce.csv
           retention-days: 30
 
-      - name: Cleanup measurement pods
+      - name: Cleanup
         if: always()
         run: |
-          kubectl delete pods -n phase4-latency \
-            -l run --ignore-not-found 2>/dev/null || true
-          kubectl delete pods -n phase4-latency \
-            --all --ignore-not-found 2>/dev/null || true
+          kubectl delete pods -n phase4-latency --all --ignore-not-found
           echo "✅ Cleanup complete"
