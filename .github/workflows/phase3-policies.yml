@@ -70,9 +70,9 @@ jobs:
 
       - name: Apply ClusterPolicies
         run: |
-          kubectl apply -f kyverno/verify-image-signature.yaml
-          kubectl apply -f kyverno/verify-slsa-provenance.yaml
-          kubectl apply -f kyverno/verify-sbom-cyclonedx.yaml
+          kubectl apply --server-side --force-conflicts -f kyverno/verify-image-signature.yaml
+          kubectl apply --server-side --force-conflicts -f kyverno/verify-slsa-provenance.yaml
+          kubectl apply --server-side --force-conflicts -f kyverno/verify-sbom-cyclonedx.yaml
 
           echo ""
           echo "─── Applied policies ───"
