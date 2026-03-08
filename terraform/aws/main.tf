@@ -1,6 +1,5 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # NETWORKING — minimal 2-AZ VPC for EKS
-# Future: an equivalent resource group / VNet block goes in terraform/azure/
 # ─────────────────────────────────────────────────────────────────────────────
 
 resource "aws_vpc" "main" {
@@ -94,7 +93,6 @@ resource "aws_iam_role_policy_attachment" "cni" {
 }
 
 resource "aws_iam_role_policy_attachment" "ecr_read" {
-  # Nodes need ReadOnly to pull images; push access is scoped to CI only
   policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
   role       = aws_iam_role.eks_nodes.name
 }
@@ -113,7 +111,6 @@ resource "aws_eks_cluster" "main" {
     endpoint_public_access = true
   }
 
-  # API and audit logs — useful for Phase 5 attack detection evidence
   enabled_cluster_log_types = ["api", "audit", "authenticator"]
 
   access_config {
@@ -125,7 +122,7 @@ resource "aws_eks_cluster" "main" {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# EKS MANAGED NODE GROUP — 1 group, t3.medium
+# EKS MANAGED NODE GROUP
 # ─────────────────────────────────────────────────────────────────────────────
 
 resource "aws_eks_node_group" "main" {
@@ -134,7 +131,7 @@ resource "aws_eks_node_group" "main" {
   node_role_arn   = aws_iam_role.eks_nodes.arn
   subnet_ids      = aws_subnet.public[*].id
   instance_types  = [var.node_instance_type]
-  ami_type       = "AL2023_x86_64_STANDARD"
+  ami_type        = "AL2023_x86_64_STANDARD"
 
   scaling_config {
     desired_size = var.node_desired
@@ -154,12 +151,7 @@ resource "aws_eks_node_group" "main" {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# OIDC IDENTITY PROVIDER
-# Enables IAM Roles for Service Accounts (IRSA).
-# The issuer URL is also referenced in Cosign keyless verification and Kyverno
-# ClusterPolicies (Phase 3) to constrain which OIDC issuer is trusted.
-# Future (Azure): AKS exposes an equivalent oidc_issuer_url directly on the
-# cluster resource — no separate provider resource is needed.
+# OIDC IDENTITY PROVIDER — EKS cluster (enables IRSA)
 # ─────────────────────────────────────────────────────────────────────────────
 
 data "tls_certificate" "eks_oidc" {
@@ -174,16 +166,21 @@ resource "aws_iam_openid_connect_provider" "eks" {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# GITHUB ACTIONS — OIDC FEDERATION ROLE
-# GitHub Actions mints a short-lived OIDC token; this role trusts that token
-# and allows the CI job to push images and sign them in ECR.
-# No static AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY are stored anywhere.
-#
-# Future (Azure): an equivalent Entra Workload Identity federated credential
-# is created via azuread_application_federated_identity_credential.
+# OIDC IDENTITY PROVIDER — GitHub Actions (no static secrets in CI)
 # ─────────────────────────────────────────────────────────────────────────────
 
+resource "aws_iam_openid_connect_provider" "github_actions" {
+  url             = "https://token.actions.githubusercontent.com"
+  client_id_list  = ["sts.amazonaws.com"]
+  thumbprint_list = ["6938fd4d98bab03faadb97b34396831e3780aea1"]
+  tags            = { Name = "github-actions-oidc" }
+}
+
 data "aws_caller_identity" "current" {}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# IAM — GitHub Actions federation role
+# ─────────────────────────────────────────────────────────────────────────────
 
 resource "aws_iam_role" "github_actions" {
   name = "${var.cluster_name}-github-actions"
@@ -201,7 +198,6 @@ resource "aws_iam_role" "github_actions" {
           "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
         }
         StringLike = {
-          # Scoped to your repo — prevents other repos assuming this role
           "token.actions.githubusercontent.com:sub" = "repo:${var.github_org}/${var.github_repo}:*"
         }
       }
@@ -217,7 +213,6 @@ resource "aws_iam_role_policy" "github_actions_ecr" {
     Version = "2012-10-17"
     Statement = [
       {
-        # GetAuthorizationToken is account-level, not repo-level
         Effect   = "Allow"
         Action   = ["ecr:GetAuthorizationToken"]
         Resource = "*"
@@ -235,8 +230,6 @@ resource "aws_iam_role_policy" "github_actions_ecr" {
           "ecr:DescribeImages",
           "ecr:DescribeRepositories",
           "ecr:ListImages",
-          # OCI referrers API — Cosign uses this to attach SBOM/provenance
-          # attestations alongside the image in Phase 2
           "ecr:PutImageTagMutability",
         ]
         Resource = aws_ecr_repository.main.arn
@@ -260,12 +253,43 @@ resource "aws_iam_role_policy" "github_actions_eks_read" {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
+# IAM — Kyverno IRSA role
+# Allows the Kyverno admission controller pods to pull from ECR when
+# verifying image signatures and attestations.
+# Created manually during Phase 3 debugging — now codified here.
+# ─────────────────────────────────────────────────────────────────────────────
+
+resource "aws_iam_role" "kyverno_ecr" {
+  name = "kyverno-ecr-read"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Principal = {
+        Federated = aws_iam_openid_connect_provider.eks.arn
+      }
+      Action = "sts:AssumeRoleWithWebIdentity"
+      Condition = {
+        StringEquals = {
+          "${replace(aws_iam_openid_connect_provider.eks.url, "https://", "")}:sub" = "system:serviceaccount:kyverno:kyverno-admission-controller"
+          "${replace(aws_iam_openid_connect_provider.eks.url, "https://", "")}:aud" = "sts.amazonaws.com"
+        }
+      }
+    }]
+  })
+
+  tags = { Name = "kyverno-ecr-read" }
+}
+
+resource "aws_iam_role_policy_attachment" "kyverno_ecr_read" {
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
+  role       = aws_iam_role.kyverno_ecr.name
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
 # ECR REPOSITORY
-# IMMUTABLE tags are critical for supply chain integrity — they prevent a
-# tag from being silently overwritten with a different (possibly malicious)
-# image layer after signing.
-# Future (Azure): ACR is created via azurerm_container_registry with
-# equivalent immutability settings.
+# MUTABLE required for Cosign — .sig and .att tags must be overwritable.
 # ─────────────────────────────────────────────────────────────────────────────
 
 resource "aws_ecr_repository" "main" {
@@ -287,7 +311,7 @@ resource "aws_ecr_lifecycle_policy" "main" {
   policy = jsonencode({
     rules = [{
       rulePriority = 1
-      description  = "Retain last 30 images — prevents unbounded registry growth during thesis"
+      description  = "Retain last 30 images"
       selection = {
         tagStatus   = "any"
         countType   = "imageCountMoreThan"
@@ -298,26 +322,10 @@ resource "aws_ecr_lifecycle_policy" "main" {
   })
 }
 
+# ─────────────────────────────────────────────────────────────────────────────
+# EKS ACCESS ENTRY — GitHub Actions admin
+# ─────────────────────────────────────────────────────────────────────────────
 
-# ─────────────────────────────────────────────────────────────────────────────
-# GITHUB ACTIONS OIDC PROVIDER
-# This is separate from the EKS cluster OIDC provider above.
-# EKS OIDC  = lets pods inside the cluster assume IAM roles (IRSA)
-# GitHub OIDC = lets GitHub Actions workflows assume IAM roles (no secrets)
-# ─────────────────────────────────────────────────────────────────────────────
-resource "aws_iam_openid_connect_provider" "github_actions" {
-  url             = "https://token.actions.githubusercontent.com"
-  client_id_list  = ["sts.amazonaws.com"]
-  thumbprint_list = ["6938fd4d98bab03faadb97b34396831e3780aea1"]
-  tags            = { Name = "github-actions-oidc" }
-}
-
-# ─────────────────────────────────────────────────────────────────────────────
-# EKS ACCESS ENTRY — GitHub Actions
-# EKS 1.29 uses access entries instead of the legacy aws-auth ConfigMap.
-# This grants the CI role admin access to the cluster for smoke tests and
-# future kubectl operations in Phase 3-5.
-# ─────────────────────────────────────────────────────────────────────────────
 resource "aws_eks_access_entry" "github_actions" {
   cluster_name  = aws_eks_cluster.main.name
   principal_arn = aws_iam_role.github_actions.arn
@@ -338,9 +346,8 @@ resource "aws_eks_access_policy_association" "github_actions_admin" {
 
 # ─────────────────────────────────────────────────────────────────────────────
 # AWS-AUTH CONFIGMAP
-# Grants the node role and GitHub Actions role access to the cluster.
-# Node role must be here or nodes cannot join the cluster.
 # ─────────────────────────────────────────────────────────────────────────────
+
 resource "kubernetes_config_map_v1_data" "aws_auth" {
   metadata {
     name      = "aws-auth"
