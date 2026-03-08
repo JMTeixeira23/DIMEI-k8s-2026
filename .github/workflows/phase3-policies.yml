@@ -4,8 +4,8 @@ on:
   push:
     branches: [main]
     paths:
-      - 'kyverno/aws/**'        # policy change → re-apply immediately
-      - 'kyverno/*.yaml'        # shared policy change
+      - 'kyverno/aws/**'
+      - 'kyverno/*.yaml'
   workflow_dispatch:
     inputs:
       mode:
@@ -14,7 +14,7 @@ on:
         default: 'Enforce'
         type: choice
         options: [Audit, Enforce]
-  workflow_call:                # triggered by Phase 2 after new image is attested
+  workflow_call:
     inputs:
       mode:
         description: 'Policy enforcement mode'
