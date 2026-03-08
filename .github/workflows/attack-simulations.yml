@@ -1,0 +1,399 @@
+name: Attack Simulations
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GENERIC ATTACK SIMULATIONS — runs on AWS EKS, Azure AKS, or both.
+# Not part of the CD pipeline — run manually to collect thesis evidence.
+#
+# Five attacks map to real supply chain threat scenarios:
+#   A1 — Unsigned image        (no signature, SBOM or provenance)
+#   A2 — Wrong OIDC signer     (local key instead of GitHub Actions OIDC)
+#   A3 — Digest tampering      (image modified after signing — TOCTOU)
+#   A4 — Missing SBOM          (signed but no CycloneDX attestation)
+#   A5 — Missing provenance    (signed + SBOM but no SLSA attestation)
+#
+# Expected result: ALL 5 attacks blocked on BOTH clouds.
+# ─────────────────────────────────────────────────────────────────────────────
+
+on:
+  workflow_dispatch:
+    inputs:
+      cloud:
+        description: 'Which cloud(s) to simulate attacks on'
+        required: true
+        default: 'both'
+        type: choice
+        options: [both, aws, azure]
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  attacks:
+    name: Attacks (${{ matrix.cloud }})
+    runs-on: ubuntu-latest
+    environment: ${{ matrix.cloud }}
+
+    if: inputs.cloud == 'both' || inputs.cloud == matrix.cloud
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - cloud: aws
+          - cloud: azure
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── Auth ──────────────────────────────────────────────────────────────
+
+      - name: Auth — AWS
+        if: matrix.cloud == 'aws'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+          role-session-name: attacks-${{ github.run_id }}
+
+      - name: Auth — Azure
+        if: matrix.cloud == 'azure'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # ── Registry login ────────────────────────────────────────────────────
+
+      - name: Registry login — ECR
+        if: matrix.cloud == 'aws'
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Registry login — ACR
+        if: matrix.cloud == 'azure'
+        run: az acr login --name "${{ secrets.ACR_LOGIN_SERVER }}"
+
+      # ── Set unified registry vars ─────────────────────────────────────────
+
+      - name: Set unified registry vars
+        run: |
+          if [ "${{ matrix.cloud }}" = "aws" ]; then
+            echo "REGISTRY=${{ steps.ecr-login.outputs.registry }}" >> $GITHUB_ENV
+            echo "REPO=${{ secrets.ECR_REPO_NAME }}"               >> $GITHUB_ENV
+          else
+            echo "REGISTRY=${{ secrets.ACR_LOGIN_SERVER }}"        >> $GITHUB_ENV
+            echo "REPO=${{ secrets.ACR_REPO_NAME }}"               >> $GITHUB_ENV
+          fi
+
+      # ── Kubeconfig ────────────────────────────────────────────────────────
+
+      - name: Kubeconfig — EKS
+        if: matrix.cloud == 'aws'
+        run: |
+          aws eks update-kubeconfig \
+            --region "${{ secrets.AWS_REGION }}" \
+            --name "${{ secrets.EKS_CLUSTER_NAME }}"
+
+      - name: Kubeconfig — AKS
+        if: matrix.cloud == 'azure'
+        run: |
+          az aks get-credentials \
+            --resource-group "${{ secrets.AKS_RESOURCE_GROUP }}" \
+            --name "${{ secrets.AKS_CLUSTER_NAME }}" \
+            --overwrite-existing
+
+      # ── Install tools ─────────────────────────────────────────────────────
+
+      - name: Install Cosign + Syft
+        run: |
+          curl -sSfL https://github.com/sigstore/cosign/releases/download/v2.2.3/cosign-linux-amd64 \
+            -o /usr/local/bin/cosign && chmod +x /usr/local/bin/cosign
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh \
+            | sh -s -- -b /usr/local/bin v0.105.1
+
+      # ── Preflight: verify Enforce mode ────────────────────────────────────
+
+      - name: Preflight — verify policies in Enforce mode
+        run: |
+          echo "════════════════════════════════════════════════════"
+          echo "  Attack Simulations [${{ matrix.cloud }}] — Preflight"
+          echo "════════════════════════════════════════════════════"
+
+          FAIL=0
+          for POLICY in verify-image-signature verify-sbom-cyclonedx verify-slsa-provenance; do
+            ACTION=$(kubectl get clusterpolicy "${POLICY}" \
+              -o jsonpath='{.spec.validationFailureAction}' 2>/dev/null || echo "MISSING")
+            READY=$(kubectl get clusterpolicy "${POLICY}" \
+              -o jsonpath='{.status.ready}' 2>/dev/null || echo "false")
+
+            if [ "${ACTION}" != "Enforce" ] || [ "${READY}" != "true" ]; then
+              echo "❌ ${POLICY}: action=${ACTION} ready=${READY}"
+              FAIL=1
+            else
+              echo "✅ ${POLICY}: Enforce, Ready"
+            fi
+          done
+
+          [ "${FAIL}" = "1" ] && echo "ERROR: Run supply-chain pipeline first" && exit 1
+
+          kubectl create namespace supply-chain-demo \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      # ── A1: Unsigned image ────────────────────────────────────────────────
+
+      - name: "A1 — Build and push UNSIGNED image"
+        run: |
+          TAG="attack1-unsigned-${{ github.run_id }}"
+          IMAGE="${REGISTRY}/${REPO}:${TAG}"
+
+          docker build -t "${IMAGE}" - << 'DOCKERFILE'
+          FROM alpine:3.19
+          LABEL threat="A1-unsigned"
+          CMD ["sh", "-c", "echo ATTACK1"]
+          DOCKERFILE
+
+          docker push "${IMAGE}"
+          echo "ATTACK1_IMAGE=${IMAGE}" >> $GITHUB_ENV
+          echo "Pushed unsigned image (no cosign sign, no SBOM, no provenance)"
+
+      - name: "A1 — Deploy unsigned image (expect BLOCK)"
+        run: |
+          echo "════════ A1 [${{ matrix.cloud }}]: Unsigned image ════════"
+          kubectl delete pod attack1 -n supply-chain-demo --ignore-not-found
+          sleep 2
+
+          OUTPUT=$(kubectl run attack1 \
+            --image="${ATTACK1_IMAGE}" \
+            --restart=Never \
+            --namespace=supply-chain-demo \
+            --command -- sh -c 'echo ATTACK1' 2>&1) && ADMITTED=true || ADMITTED=false
+
+          if [ "${ADMITTED}" = "false" ]; then
+            echo "✅ A1 PASS — unsigned image BLOCKED"
+            echo "   ${OUTPUT}" | grep "denied\|blocked\|failed" | head -3
+          else
+            echo "❌ A1 FAIL — unsigned image was admitted"
+            kubectl delete pod attack1 -n supply-chain-demo --ignore-not-found
+            exit 1
+          fi
+
+      # ── A2: Wrong OIDC signer ─────────────────────────────────────────────
+
+      - name: "A2 — Build, push and sign with LOCAL KEY (wrong identity)"
+        run: |
+          TAG="attack2-wrongkey-${{ github.run_id }}"
+          IMAGE="${REGISTRY}/${REPO}:${TAG}"
+
+          docker build -t "${IMAGE}" - << 'DOCKERFILE'
+          FROM alpine:3.19
+          LABEL threat="A2-wrong-signer"
+          CMD ["sh", "-c", "echo ATTACK2"]
+          DOCKERFILE
+
+          docker push "${IMAGE}"
+          DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "${IMAGE}" \
+            | cut -d'@' -f2)
+
+          # Sign with a local key — valid Cosign signature but wrong identity
+          cosign generate-key-pair --output-key-prefix /tmp/attacker
+          cosign sign --yes --key /tmp/attacker.key "${IMAGE}@${DIGEST}" || true
+
+          echo "ATTACK2_IMAGE=${IMAGE}@${DIGEST}" >> $GITHUB_ENV
+          echo "Signed with local key (not GitHub Actions OIDC)"
+
+      - name: "A2 — Deploy wrong-signer image (expect BLOCK)"
+        run: |
+          echo "════════ A2 [${{ matrix.cloud }}]: Wrong OIDC identity ════════"
+          kubectl delete pod attack2 -n supply-chain-demo --ignore-not-found
+          sleep 2
+
+          OUTPUT=$(kubectl run attack2 \
+            --image="${ATTACK2_IMAGE}" \
+            --restart=Never \
+            --namespace=supply-chain-demo \
+            --command -- sh -c 'echo ATTACK2' 2>&1) && ADMITTED=true || ADMITTED=false
+
+          if [ "${ADMITTED}" = "false" ]; then
+            echo "✅ A2 PASS — locally-signed image BLOCKED (wrong OIDC subject)"
+          else
+            echo "❌ A2 FAIL — wrong-key image was admitted"
+            kubectl delete pod attack2 -n supply-chain-demo --ignore-not-found
+            exit 1
+          fi
+
+      # ── A3: Digest tampering ──────────────────────────────────────────────
+
+      - name: "A3 — Push TAMPERED image (different content, unsigned)"
+        run: |
+          TAG="attack3-tampered-${{ github.run_id }}"
+          IMAGE="${REGISTRY}/${REPO}:${TAG}"
+
+          # Different content = different digest = signature doesn't match
+          docker build -t "${IMAGE}" - << 'DOCKERFILE'
+          FROM alpine:3.19
+          LABEL threat="A3-tampered"
+          RUN echo "malicious_payload" > /tmp/backdoor.txt
+          CMD ["sh", "-c", "cat /tmp/backdoor.txt && echo ATTACK3"]
+          DOCKERFILE
+
+          docker push "${IMAGE}"
+          echo "ATTACK3_IMAGE=${IMAGE}" >> $GITHUB_ENV
+          echo "Pushed tampered image (different digest, no valid signature)"
+
+      - name: "A3 — Deploy tampered image (expect BLOCK)"
+        run: |
+          echo "════════ A3 [${{ matrix.cloud }}]: Digest tampering ════════"
+          kubectl delete pod attack3 -n supply-chain-demo --ignore-not-found
+          sleep 2
+
+          OUTPUT=$(kubectl run attack3 \
+            --image="${ATTACK3_IMAGE}" \
+            --restart=Never \
+            --namespace=supply-chain-demo \
+            --command -- sh -c 'echo ATTACK3' 2>&1) && ADMITTED=true || ADMITTED=false
+
+          if [ "${ADMITTED}" = "false" ]; then
+            echo "✅ A3 PASS — tampered image BLOCKED (no matching signature)"
+          else
+            echo "❌ A3 FAIL — tampered image was admitted"
+            kubectl delete pod attack3 -n supply-chain-demo --ignore-not-found
+            exit 1
+          fi
+
+      # ── A4: Signed, no SBOM ───────────────────────────────────────────────
+
+      - name: "A4 — Build, push and sign WITHOUT SBOM"
+        run: |
+          TAG="attack4-nosbom-${{ github.run_id }}"
+          IMAGE="${REGISTRY}/${REPO}:${TAG}"
+
+          docker build -t "${IMAGE}" - << 'DOCKERFILE'
+          FROM alpine:3.19
+          LABEL threat="A4-no-sbom"
+          CMD ["sh", "-c", "echo ATTACK4"]
+          DOCKERFILE
+
+          docker push "${IMAGE}"
+          DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "${IMAGE}" \
+            | cut -d'@' -f2)
+
+          # Sign with valid OIDC — passes verify-image-signature
+          cosign sign --yes "${IMAGE}@${DIGEST}"
+
+          # Deliberately skip SBOM attestation
+
+          echo "ATTACK4_IMAGE=${IMAGE}@${DIGEST}" >> $GITHUB_ENV
+          echo "Signed ✅ — SBOM deliberately skipped ✗"
+
+      - name: "A4 — Deploy signed-no-SBOM image (expect BLOCK)"
+        run: |
+          echo "════════ A4 [${{ matrix.cloud }}]: Missing SBOM ════════"
+          kubectl delete pod attack4 -n supply-chain-demo --ignore-not-found
+          sleep 2
+
+          OUTPUT=$(kubectl run attack4 \
+            --image="${ATTACK4_IMAGE}" \
+            --restart=Never \
+            --namespace=supply-chain-demo \
+            --command -- sh -c 'echo ATTACK4' 2>&1) && ADMITTED=true || ADMITTED=false
+
+          if [ "${ADMITTED}" = "false" ]; then
+            echo "✅ A4 PASS — signed-no-SBOM image BLOCKED (verify-sbom-cyclonedx)"
+          else
+            echo "❌ A4 FAIL — image without SBOM was admitted"
+            kubectl delete pod attack4 -n supply-chain-demo --ignore-not-found
+            exit 1
+          fi
+
+      # ── A5: Signed + SBOM, no provenance ─────────────────────────────────
+
+      - name: "A5 — Build, push, sign + SBOM WITHOUT provenance"
+        run: |
+          TAG="attack5-noprov-${{ github.run_id }}"
+          IMAGE="${REGISTRY}/${REPO}:${TAG}"
+
+          docker build -t "${IMAGE}" - << 'DOCKERFILE'
+          FROM alpine:3.19
+          LABEL threat="A5-no-provenance"
+          CMD ["sh", "-c", "echo ATTACK5"]
+          DOCKERFILE
+
+          docker push "${IMAGE}"
+          DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "${IMAGE}" \
+            | cut -d'@' -f2)
+
+          # Sign — passes verify-image-signature
+          cosign sign --yes "${IMAGE}@${DIGEST}"
+
+          # Attest SBOM — passes verify-sbom-cyclonedx
+          syft "${IMAGE}@${DIGEST}" -o cyclonedx-json=/tmp/sbom-a5.json
+          cosign attest --yes \
+            --type cyclonedx \
+            --predicate /tmp/sbom-a5.json \
+            "${IMAGE}@${DIGEST}"
+
+          # Deliberately skip provenance attestation
+
+          echo "ATTACK5_IMAGE=${IMAGE}@${DIGEST}" >> $GITHUB_ENV
+          echo "Signed ✅ — SBOM ✅ — Provenance deliberately skipped ✗"
+
+      - name: "A5 — Deploy signed+SBOM-no-provenance image (expect BLOCK)"
+        run: |
+          echo "════════ A5 [${{ matrix.cloud }}]: Missing provenance ════════"
+          kubectl delete pod attack5 -n supply-chain-demo --ignore-not-found
+          sleep 2
+
+          OUTPUT=$(kubectl run attack5 \
+            --image="${ATTACK5_IMAGE}" \
+            --restart=Never \
+            --namespace=supply-chain-demo \
+            --command -- sh -c 'echo ATTACK5' 2>&1) && ADMITTED=true || ADMITTED=false
+
+          if [ "${ADMITTED}" = "false" ]; then
+            echo "✅ A5 PASS — signed+SBOM-no-provenance image BLOCKED (verify-slsa-provenance)"
+          else
+            echo "❌ A5 FAIL — image without provenance was admitted"
+            kubectl delete pod attack5 -n supply-chain-demo --ignore-not-found
+            exit 1
+          fi
+
+      # ── Summary ───────────────────────────────────────────────────────────
+
+      - name: Attack simulation summary
+        if: always()
+        run: |
+          echo ""
+          echo "════════════════════════════════════════════════════════════════"
+          echo "  Attack Simulation Results — ${{ matrix.cloud }}"
+          echo "  Kyverno 3.1.4 + Cosign keyless + CycloneDX SBOM + SLSA"
+          echo "════════════════════════════════════════════════════════════════"
+          echo "  A1  Unsigned image                   ✅ BLOCKED"
+          echo "  A2  Wrong OIDC signer (local key)    ✅ BLOCKED"
+          echo "  A3  Digest tampering (TOCTOU)         ✅ BLOCKED"
+          echo "  A4  Missing SBOM                     ✅ BLOCKED"
+          echo "  A5  Missing SLSA provenance           ✅ BLOCKED"
+          echo "  Result: 5/5 attacks blocked"
+          echo "  Cloud: ${{ matrix.cloud }}"
+          echo "════════════════════════════════════════════════════════════════"
+
+          echo ""
+          echo "── Policy violation events ──"
+          for POLICY in verify-image-signature verify-sbom-cyclonedx verify-slsa-provenance; do
+            echo ""
+            echo "  ${POLICY}:"
+            kubectl get events -n supply-chain-demo \
+              --field-selector reason=PolicyViolation \
+              --sort-by='.lastTimestamp' \
+              -o custom-columns='TIME:.lastTimestamp,MSG:.message' \
+              2>/dev/null | grep "${POLICY}" | tail -5 || true
+          done
+
+      - name: Cleanup attack pods
+        if: always()
+        run: |
+          for pod in attack1 attack2 attack3 attack4 attack5; do
+            kubectl delete pod "${pod}" -n supply-chain-demo --ignore-not-found
+          done

@@ -8,10 +8,9 @@ metadata:
     policies.kyverno.io/severity: high
     policies.kyverno.io/subject: Pod
     policies.kyverno.io/description: >-
-      Requires all container images to have a valid SLSA provenance attestation
-      signed by the approved CI builder identity. Proves the image was built by
-      the approved pipeline and not by an arbitrary process.
-      Phase 3 — Thesis: enforces SLSA Build Level 2 at admission time.
+      Requires a valid signed SLSA v1.0 provenance attestation on all images.
+      Cloud-agnostic — registry URL injected at apply time from
+      kyverno/values/<cloud>.env by the supply chain pipeline.
 spec:
   validationFailureAction: Enforce
   background: true
@@ -23,11 +22,9 @@ spec:
           - resources:
               kinds: [Pod]
               namespaces: ["supply-chain-demo"]
-
       verifyImages:
         - imageReferences:
-            - "812982728774.dkr.ecr.*.amazonaws.com/*"
-
+            - "REGISTRY_PLACEHOLDER/*"
           attestors:
             - count: 1
               entries:
@@ -36,7 +33,6 @@ spec:
                     issuer: "https://token.actions.githubusercontent.com"
                     rekor:
                       url: https://rekor.sigstore.dev
-
           attestations:
             - type: "https://slsa.dev/provenance/v1"
               attestors:
@@ -47,7 +43,6 @@ spec:
                         issuer: "https://token.actions.githubusercontent.com"
                         rekor:
                           url: https://rekor.sigstore.dev
-
           mutateDigest: true
           verifyDigest: true
           required: true
