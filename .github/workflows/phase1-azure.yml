@@ -4,7 +4,6 @@ on:
   push:
     branches: [main]
     paths:
-      - 'terraform/azure/**'
       - 'docker/**'
       - '.github/workflows/phase1-azure.yml'
   workflow_dispatch:

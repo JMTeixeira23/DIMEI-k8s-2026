@@ -4,9 +4,8 @@ on:
   push:
     branches: [main]
     paths:
-      - 'terraform/aws/**'
-      - '.github/workflows/phase1-bootstrap.yml'
       - 'docker/**'
+      - '.github/workflows/phase1-bootstrap.yml'
   workflow_dispatch:
 
 permissions:
@@ -122,10 +121,6 @@ jobs:
 
       - name: Smoke test — deploy ephemeral pod and confirm execution
         run: |
-          # Clean up any leftover pod from a previous failed run
-          kubectl delete pod smoke-test --ignore-not-found
-          sleep 3
-
           kubectl run smoke-test \
             --image="${FULL_IMAGE}" \
             --restart=Never \
@@ -137,8 +132,7 @@ jobs:
           echo "--- Pod events (look for image pull errors here) ---"
           kubectl describe pod smoke-test | grep -A 20 "Events:"
 
-          # Wait for pod phase=Succeeded (not a condition — hence jsonpath)
-          kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/smoke-test --timeout=90s
+          kubectl wait --for=condition=Succeeded pod/smoke-test --timeout=90s
           echo "--- Pod logs ---"
           kubectl logs smoke-test
           kubectl delete pod smoke-test --ignore-not-found

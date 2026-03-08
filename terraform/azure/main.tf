@@ -115,7 +115,8 @@ resource "azuread_application_federated_identity_credential" "github_actions" {
   issuer    = "https://token.actions.githubusercontent.com"
 
   # Scoped to your repo — prevents other repos using this credential
-  subject = "repo:${var.github_org}/${var.github_repo}:ref:refs/heads/main"
+  # Workflows using environment: send "environment:NAME" not "ref:..." as subject
+  subject = "repo:${var.github_org}/${var.github_repo}:environment:azure"
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
