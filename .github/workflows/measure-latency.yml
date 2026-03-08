@@ -1,0 +1,335 @@
+name: Measure Admission Latency
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GENERIC LATENCY MEASUREMENT — runs on AWS EKS, Azure AKS, or both.
+# Not part of the CD pipeline — run manually to collect thesis data.
+#
+# Measures Kyverno admission overhead across three conditions:
+#   baseline  — policies deleted (no Kyverno overhead)
+#   audit     — policies in Audit mode
+#   enforce   — policies in Enforce mode
+# ─────────────────────────────────────────────────────────────────────────────
+
+on:
+  workflow_dispatch:
+    inputs:
+      cloud:
+        description: 'Which cloud(s) to measure'
+        required: true
+        default: 'both'
+        type: choice
+        options: [both, aws, azure]
+      iterations:
+        description: 'Pods per condition (default: 30)'
+        required: false
+        default: '30'
+
+permissions:
+  id-token: write
+  contents: read
+  actions: read
+
+jobs:
+  measure:
+    name: Latency (${{ matrix.cloud }})
+    runs-on: ubuntu-latest
+    environment: ${{ matrix.cloud }}
+
+    if: inputs.cloud == 'both' || inputs.cloud == matrix.cloud
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - cloud: aws
+          - cloud: azure
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── Auth ──────────────────────────────────────────────────────────────
+
+      - name: Auth — AWS
+        if: matrix.cloud == 'aws'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+          role-session-name: latency-${{ github.run_id }}
+
+      - name: Auth — Azure
+        if: matrix.cloud == 'azure'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # ── Registry login ────────────────────────────────────────────────────
+
+      - name: Registry login — ECR
+        if: matrix.cloud == 'aws'
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Registry login — ACR
+        if: matrix.cloud == 'azure'
+        run: az acr login --name "${{ secrets.ACR_LOGIN_SERVER }}"
+
+      # ── Kubeconfig ────────────────────────────────────────────────────────
+
+      - name: Kubeconfig — EKS
+        if: matrix.cloud == 'aws'
+        run: |
+          aws eks update-kubeconfig \
+            --region "${{ secrets.AWS_REGION }}" \
+            --name "${{ secrets.EKS_CLUSTER_NAME }}"
+
+      - name: Kubeconfig — AKS
+        if: matrix.cloud == 'azure'
+        run: |
+          az aks get-credentials \
+            --resource-group "${{ secrets.AKS_RESOURCE_GROUP }}" \
+            --name "${{ secrets.AKS_CLUSTER_NAME }}" \
+            --overwrite-existing
+
+      # ── Get latest signed image ───────────────────────────────────────────
+
+      - name: Get latest signed image (AWS)
+        if: matrix.cloud == 'aws'
+        run: |
+          LATEST_TAG=$(aws ecr describe-images \
+            --repository-name "${{ secrets.ECR_REPO_NAME }}" \
+            --region "${{ secrets.AWS_REGION }}" \
+            --output json \
+            | jq -r '
+                .imageDetails
+                | map(select(.imageTags != null))
+                | map(select(.imageTags[] | test("^sha256") | not))
+                | map(select(.imageTags[] | test("-")))
+                | map(select(.imageTags[] | test("^(attack|size-)") | not))
+                | sort_by(.imagePushedAt)
+                | last
+                | .imageTags[0]
+              ')
+          REGISTRY="${{ steps.ecr-login.outputs.registry }}"
+          echo "SIGNED_IMAGE=${REGISTRY}/${{ secrets.ECR_REPO_NAME }}:${LATEST_TAG}" >> $GITHUB_ENV
+          echo "Latest image: ${SIGNED_IMAGE}"
+
+      - name: Get latest signed image (Azure)
+        if: matrix.cloud == 'azure'
+        run: |
+          LATEST_TAG=$(az acr repository show-tags \
+            --name "${{ secrets.ACR_LOGIN_SERVER }}" \
+            --repository "${{ secrets.ACR_REPO_NAME }}" \
+            --orderby time_desc \
+            --output tsv \
+            | grep -E '^[a-f0-9]+-[0-9]+$' \
+            | grep -vE '^(attack|size-)' \
+            | head -1)
+          echo "SIGNED_IMAGE=${{ secrets.ACR_LOGIN_SERVER }}/${{ secrets.ACR_REPO_NAME }}:${LATEST_TAG}" >> $GITHUB_ENV
+          echo "Latest image: ${SIGNED_IMAGE}"
+
+      # ── Save and delete policies (baseline measurement) ───────────────────
+
+      - name: Save policies and delete for baseline
+        run: |
+          mkdir -p /tmp/policies-backup
+          kubectl get clusterpolicy \
+            verify-image-signature \
+            verify-sbom-cyclonedx \
+            verify-slsa-provenance \
+            -o yaml > /tmp/policies-backup/all-policies.yaml 2>/dev/null || true
+
+          kubectl delete clusterpolicy \
+            verify-image-signature \
+            verify-sbom-cyclonedx \
+            verify-slsa-provenance \
+            --ignore-not-found
+
+          # Wait for webhooks to deregister
+          sleep 10
+          echo "✅ Policies removed — baseline measurement ready"
+
+      # ── Measure function ──────────────────────────────────────────────────
+
+      - name: Measure baseline latency (no policies)
+        run: |
+          N=${{ github.event.inputs.iterations }}
+          echo "condition,latency_ms" > /tmp/baseline.csv
+
+          for i in $(seq 1 ${N}); do
+            kubectl delete pod latency-probe --ignore-not-found 2>/dev/null
+            kubectl wait pod/latency-probe --for=delete --timeout=30s 2>/dev/null || true
+
+            START=$(date +%s%3N)
+            kubectl run latency-probe \
+              --image="${SIGNED_IMAGE}" \
+              --restart=Never \
+              --command -- sh -c 'exit 0' 2>/dev/null
+
+            for j in $(seq 1 20); do
+              PHASE=$(kubectl get pod latency-probe \
+                -o jsonpath='{.status.phase}' 2>/dev/null || echo "Pending")
+              [ "${PHASE}" = "Succeeded" ] || [ "${PHASE}" = "Failed" ] && break
+              sleep 0.5
+            done
+            END=$(date +%s%3N)
+
+            echo "baseline,$((END - START))" >> /tmp/baseline.csv
+            sleep 1
+          done
+
+          echo "✅ Baseline done (${N} iterations)"
+
+      - name: Restore policies in Audit mode
+        run: |
+          REGISTRY_VAL=$(grep '^REGISTRY=' kyverno/values/${{ matrix.cloud }}.env \
+            | cut -d= -f2)
+          mkdir -p /tmp/kyverno-audit
+          for f in kyverno/verify-*.yaml; do
+            sed "s|REGISTRY_PLACEHOLDER|${REGISTRY_VAL}|g" "$f" \
+              | sed "s/validationFailureAction: .*/validationFailureAction: Audit/" \
+              | sed "s/mutateDigest: .*/mutateDigest: false/" \
+              | sed "s/verifyDigest: .*/verifyDigest: false/" \
+              > "/tmp/kyverno-audit/$(basename $f)"
+          done
+          kubectl apply --server-side --force-conflicts -f /tmp/kyverno-audit/
+          sleep 10
+          echo "✅ Policies in Audit mode"
+
+      - name: Measure audit latency
+        run: |
+          N=${{ github.event.inputs.iterations }}
+          echo "condition,latency_ms" > /tmp/audit.csv
+
+          for i in $(seq 1 ${N}); do
+            kubectl delete pod latency-probe --ignore-not-found 2>/dev/null
+            kubectl wait pod/latency-probe --for=delete --timeout=30s 2>/dev/null || true
+
+            START=$(date +%s%3N)
+            kubectl run latency-probe \
+              --image="${SIGNED_IMAGE}" \
+              --restart=Never \
+              --command -- sh -c 'exit 0' 2>/dev/null
+
+            for j in $(seq 1 20); do
+              PHASE=$(kubectl get pod latency-probe \
+                -o jsonpath='{.status.phase}' 2>/dev/null || echo "Pending")
+              [ "${PHASE}" = "Succeeded" ] || [ "${PHASE}" = "Failed" ] && break
+              sleep 0.5
+            done
+            END=$(date +%s%3N)
+
+            echo "audit,$((END - START))" >> /tmp/audit.csv
+            sleep 1
+          done
+          echo "✅ Audit done (${N} iterations)"
+
+      - name: Switch policies to Enforce mode
+        run: |
+          REGISTRY_VAL=$(grep '^REGISTRY=' kyverno/values/${{ matrix.cloud }}.env \
+            | cut -d= -f2)
+          mkdir -p /tmp/kyverno-enforce
+          for f in kyverno/verify-*.yaml; do
+            sed "s|REGISTRY_PLACEHOLDER|${REGISTRY_VAL}|g" "$f" \
+              | sed "s/validationFailureAction: .*/validationFailureAction: Enforce/" \
+              | sed "s/mutateDigest: .*/mutateDigest: true/" \
+              | sed "s/verifyDigest: .*/verifyDigest: true/" \
+              > "/tmp/kyverno-enforce/$(basename $f)"
+          done
+          kubectl apply --server-side --force-conflicts -f /tmp/kyverno-enforce/
+          sleep 10
+          echo "✅ Policies in Enforce mode"
+
+      - name: Measure enforce latency
+        run: |
+          N=${{ github.event.inputs.iterations }}
+          echo "condition,latency_ms" > /tmp/enforce.csv
+
+          for i in $(seq 1 ${N}); do
+            kubectl delete pod latency-probe --ignore-not-found 2>/dev/null
+            kubectl wait pod/latency-probe --for=delete --timeout=30s 2>/dev/null || true
+
+            START=$(date +%s%3N)
+            kubectl run latency-probe \
+              --image="${SIGNED_IMAGE}" \
+              --restart=Never \
+              --command -- sh -c 'exit 0' 2>/dev/null
+
+            for j in $(seq 1 20); do
+              PHASE=$(kubectl get pod latency-probe \
+                -o jsonpath='{.status.phase}' 2>/dev/null || echo "Pending")
+              [ "${PHASE}" = "Succeeded" ] || [ "${PHASE}" = "Failed" ] && break
+              sleep 0.5
+            done
+            END=$(date +%s%3N)
+
+            echo "enforce,$((END - START))" >> /tmp/enforce.csv
+            sleep 1
+          done
+          echo "✅ Enforce done (${N} iterations)"
+
+      # ── Aggregate results ─────────────────────────────────────────────────
+
+      - name: Compute statistics and print results
+        run: |
+          cat /tmp/baseline.csv /tmp/audit.csv /tmp/enforce.csv \
+            | grep -v "^condition" > /tmp/all-raw.csv
+
+          python3 - << 'PYEOF'
+          import csv, statistics, os
+
+          cloud = "${{ matrix.cloud }}"
+          rows = {}
+          with open("/tmp/all-raw.csv") as f:
+            for line in f:
+              cond, val = line.strip().split(",")
+              rows.setdefault(cond, []).append(int(val))
+
+          print(f"\n{'='*65}")
+          print(f"  Admission Latency — {cloud.upper()} (n=${{ github.event.inputs.iterations }})")
+          print(f"{'='*65}")
+          print(f"{'condition':<12} {'n':>4} {'mean':>8} {'median':>8} {'stdev':>8} {'p95':>8}")
+          print("-"*65)
+
+          results = []
+          for cond in ["baseline", "audit", "enforce"]:
+            vals = sorted(rows.get(cond, []))
+            if not vals: continue
+            mean   = statistics.mean(vals)
+            median = statistics.median(vals)
+            stdev  = statistics.stdev(vals)
+            p95    = vals[int(len(vals) * 0.95)]
+            print(f"{cond:<12} {len(vals):>4} {mean:>7.0f}ms {median:>7.0f}ms {stdev:>7.0f}ms {p95:>7.0f}ms")
+            results.append((cond, len(vals), round(mean), round(median), round(stdev), p95))
+
+          baseline_mean = next(r[2] for r in results if r[0] == "baseline")
+          enforce_mean  = next(r[2] for r in results if r[0] == "enforce")
+          overhead = enforce_mean - baseline_mean
+          pct      = overhead / baseline_mean * 100
+
+          print("-"*65)
+          print(f"Kyverno overhead: +{overhead}ms (+{pct:.1f}%)")
+          print(f"{'='*65}\n")
+
+          # Write CSV for thesis table
+          with open(f"/tmp/latency-{cloud}.csv", "w") as f:
+            f.write("cloud,condition,n,mean_ms,median_ms,stdev_ms,p95_ms\n")
+            for r in results:
+              f.write(f"{cloud},{r[0]},{r[1]},{r[2]},{r[3]},{r[4]},{r[5]}\n")
+
+          print(f"CSV saved to /tmp/latency-{cloud}.csv")
+          PYEOF
+
+      - name: Upload latency CSV
+        uses: actions/upload-artifact@v4
+        with:
+          name: latency-${{ matrix.cloud }}
+          path: /tmp/latency-${{ matrix.cloud }}.csv
+          retention-days: 30
+
+      - name: Cleanup probe pod
+        if: always()
+        run: kubectl delete pod latency-probe --ignore-not-found
