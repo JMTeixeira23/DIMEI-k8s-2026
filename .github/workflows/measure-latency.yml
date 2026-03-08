@@ -35,8 +35,6 @@ jobs:
     runs-on: ubuntu-latest
     environment: ${{ matrix.cloud }}
 
-    if: inputs.cloud == 'both' || inputs.cloud == matrix.cloud
-
     strategy:
       fail-fast: false
       matrix:
@@ -47,6 +45,15 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Check cloud selection
+        run: |
+          SELECTED="${{ inputs.cloud }}"
+          THIS="${{ matrix.cloud }}"
+          if [ "${SELECTED}" != "both" ] && [ "${SELECTED}" != "${THIS}" ]; then
+            echo "Skipping ${THIS} — selected: ${SELECTED}"
+            exit 0
+          fi
 
       # ── Auth ──────────────────────────────────────────────────────────────
 

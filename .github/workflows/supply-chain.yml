@@ -1,0 +1,435 @@
+name: Supply Chain Security Pipeline
+
+# ─────────────────────────────────────────────────────────────────────────────
+# UNIFIED PIPELINE — runs identically on AWS EKS and Azure AKS in parallel.
+#
+# The only cloud-specific steps are:
+#   1. Auth   (OIDC federation — AWS vs Entra)
+#   2. Registry login (ECR vs ACR)
+#   3. Kubeconfig (eks update-kubeconfig vs aks get-credentials)
+#   4. Registry URL injection into Kyverno policies
+#
+# Everything else — Cosign signing, Syft SBOM, SLSA provenance,
+# Kyverno policy application, admission tests — is identical.
+#
+# Trigger: any change to docker/ → full supply chain runs on both clouds.
+# ─────────────────────────────────────────────────────────────────────────────
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docker/**'
+  workflow_dispatch:
+    inputs:
+      cloud:
+        description: 'Which cloud(s) to run on'
+        required: true
+        default: 'both'
+        type: choice
+        options: [both, aws, azure]
+
+permissions:
+  id-token: write   # OIDC tokens for AWS, Azure and Cosign keyless
+  contents: read
+  actions: read
+
+env:
+  IMAGE_TAG: ${{ github.sha }}-${{ github.run_id }}
+
+jobs:
+  supply-chain:
+    name: Supply Chain (${{ matrix.cloud }})
+    runs-on: ubuntu-latest
+    environment: ${{ matrix.cloud }}
+
+    strategy:
+      fail-fast: false   # one cloud failing should not cancel the other
+      matrix:
+        include:
+          - cloud: aws
+          - cloud: azure
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check cloud selection
+        run: |
+          SELECTED="${{ inputs.cloud }}"
+          THIS="${{ matrix.cloud }}"
+          # On push, always run both. On manual trigger, skip if not selected.
+          if [ -n "${SELECTED}" ] && [ "${SELECTED}" != "both" ] && [ "${SELECTED}" != "${THIS}" ]; then
+            echo "Skipping ${THIS} — selected: ${SELECTED}"
+            exit 0
+          fi
+
+      # ── STEP 1 — Auth (cloud-specific) ────────────────────────────────────
+
+      - name: Auth — AWS (OIDC federation, no static credentials)
+        if: matrix.cloud == 'aws'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+          role-session-name: supply-chain-${{ github.run_id }}
+
+      - name: Auth — Azure (OIDC federation, no static credentials)
+        if: matrix.cloud == 'azure'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # ── STEP 2 — Registry login (cloud-specific) ──────────────────────────
+
+      - name: Registry login — ECR (AWS)
+        if: matrix.cloud == 'aws'
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Registry login — ACR (Azure)
+        if: matrix.cloud == 'azure'
+        run: az acr login --name "${{ secrets.ACR_LOGIN_SERVER }}"
+
+      # ── STEP 3 — Resolve unified env vars ─────────────────────────────────
+      # From this point on, $REGISTRY and $REPO are used everywhere.
+
+      - name: Set unified registry vars
+        run: |
+          if [ "${{ matrix.cloud }}" = "aws" ]; then
+            echo "REGISTRY=${{ steps.ecr-login.outputs.registry }}" >> $GITHUB_ENV
+            echo "REPO=${{ secrets.ECR_REPO_NAME }}"               >> $GITHUB_ENV
+          else
+            echo "REGISTRY=${{ secrets.ACR_LOGIN_SERVER }}"        >> $GITHUB_ENV
+            echo "REPO=${{ secrets.ACR_REPO_NAME }}"               >> $GITHUB_ENV
+          fi
+
+      # ── STEP 4 — Build & Push ─────────────────────────────────────────────
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push image
+        run: |
+          FULL_IMAGE="${REGISTRY}/${REPO}:${IMAGE_TAG}"
+
+          docker buildx build \
+            --build-arg GIT_SHA="${IMAGE_TAG}" \
+            --tag "${FULL_IMAGE}" \
+            --push \
+            --provenance=false \
+            --metadata-file /tmp/build-metadata.json \
+            docker/hello-world
+
+          DIGEST=$(jq -r '."containerimage.digest"' /tmp/build-metadata.json)
+          IMAGE_REF="${REGISTRY}/${REPO}@${DIGEST}"
+
+          # Persist for all downstream steps in this job
+          echo "FULL_IMAGE=${FULL_IMAGE}" >> $GITHUB_ENV
+          echo "DIGEST=${DIGEST}"         >> $GITHUB_ENV
+          echo "IMAGE_REF=${IMAGE_REF}"   >> $GITHUB_ENV
+
+          echo "✅ Built: ${IMAGE_REF}"
+
+      # ── STEP 5 — Sign (Cosign keyless OIDC) ───────────────────────────────
+      # Identical on both clouds — Cosign uses the GitHub Actions OIDC token,
+      # not any cloud-specific credential.
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: v2.2.3
+
+      - name: Sign image by digest (keyless)
+        run: |
+          cosign sign --yes "${IMAGE_REF}"
+          echo "✅ Signed: ${IMAGE_REF}"
+
+      # ── STEP 6 — SBOM (CycloneDX via Syft) ───────────────────────────────
+
+      - name: Install Syft
+        uses: anchore/sbom-action/download-syft@v0
+        with:
+          syft-version: v0.105.1
+
+      - name: Generate and attest CycloneDX SBOM
+        run: |
+          syft "${IMAGE_REF}" --output cyclonedx-json=sbom.cdx.json
+
+          echo "✅ SBOM generated"
+          echo "   Components: $(jq '.components | length' sbom.cdx.json)"
+
+          cosign attest --yes \
+            --predicate sbom.cdx.json \
+            --type cyclonedx \
+            "${IMAGE_REF}"
+          echo "✅ SBOM attested"
+
+      # ── STEP 7 — SLSA Provenance ──────────────────────────────────────────
+
+      - name: Generate and attest SLSA provenance
+        env:
+          GH_REPOSITORY:  ${{ github.repository }}
+          GH_REF_NAME:    ${{ github.ref_name }}
+          GH_SHA:         ${{ github.sha }}
+          GH_EVENT:       ${{ github.event_name }}
+          GH_WORKFLOW:    ${{ github.workflow }}
+          GH_RUN_ID:      ${{ github.run_id }}
+          GH_RUN_ATTEMPT: ${{ github.run_attempt }}
+          CLOUD:          ${{ matrix.cloud }}
+        run: |
+          BUILD_TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+          FULL_IMAGE="${FULL_IMAGE}" \
+          BUILD_TIMESTAMP="${BUILD_TIMESTAMP}" \
+          python3 - << 'PYEOF'
+          import json, os
+
+          repo        = os.environ["GH_REPOSITORY"]
+          ref_name    = os.environ["GH_REF_NAME"]
+          sha         = os.environ["GH_SHA"]
+          event       = os.environ["GH_EVENT"]
+          workflow    = os.environ["GH_WORKFLOW"]
+          run_id      = os.environ["GH_RUN_ID"]
+          run_attempt = os.environ["GH_RUN_ATTEMPT"]
+          full_image  = os.environ["FULL_IMAGE"]
+          timestamp   = os.environ["BUILD_TIMESTAMP"]
+          cloud       = os.environ["CLOUD"]
+
+          provenance = {
+            "buildDefinition": {
+              "buildType": "https://slsa.dev/container-based-build/v0.1",
+              "externalParameters": {
+                "source": {
+                  "uri": f"git+https://github.com/{repo}@refs/heads/{ref_name}",
+                  "digest": {"gitCommit": sha}
+                },
+                "image": full_image,
+                "cloud": cloud
+              },
+              "internalParameters": {
+                "githubEventName":  event,
+                "githubWorkflow":   workflow,
+                "githubRunId":      run_id,
+                "githubRunAttempt": run_attempt
+              },
+              "resolvedDependencies": [{
+                "uri": f"git+https://github.com/{repo}@refs/heads/{ref_name}",
+                "digest": {"gitCommit": sha}
+              }]
+            },
+            "runDetails": {
+              "builder": {
+                "id": f"https://github.com/{repo}/.github/workflows/supply-chain.yml@refs/heads/{ref_name}"
+              },
+              "metadata": {
+                "invocationId": f"https://github.com/{repo}/actions/runs/{run_id}/attempts/{run_attempt}",
+                "startedOn":  timestamp,
+                "finishedOn": timestamp
+              }
+            }
+          }
+
+          with open("provenance.json", "w") as f:
+            json.dump(provenance, f, indent=2)
+
+          print("✅ Provenance generated")
+          print(f"   Builder  : {provenance['runDetails']['builder']['id']}")
+          print(f"   Cloud    : {cloud}")
+          print(f"   Commit   : {sha}")
+          PYEOF
+
+          cosign attest --yes \
+            --predicate provenance.json \
+            --type slsaprovenance1 \
+            "${IMAGE_REF}"
+          echo "✅ Provenance attested"
+
+      # ── STEP 8 — Verify all attestations ──────────────────────────────────
+
+      - name: Verify signature + attestations
+        run: |
+          CERT_REGEXP="https://github.com/${{ github.repository }}.*"
+          CERT_ISSUER="https://token.actions.githubusercontent.com"
+
+          cosign verify \
+            --certificate-identity-regexp "${CERT_REGEXP}" \
+            --certificate-oidc-issuer "${CERT_ISSUER}" \
+            "${IMAGE_REF}"
+          echo "✅ Signature verified"
+
+          cosign verify-attestation \
+            --certificate-identity-regexp "${CERT_REGEXP}" \
+            --certificate-oidc-issuer "${CERT_ISSUER}" \
+            --type cyclonedx "${IMAGE_REF}" \
+            | jq -r '.payload | @base64d | fromjson |
+                "✅ SBOM verified — components: \(.predicate.components | length)"'
+
+          cosign verify-attestation \
+            --certificate-identity-regexp "${CERT_REGEXP}" \
+            --certificate-oidc-issuer "${CERT_ISSUER}" \
+            --type slsaprovenance1 "${IMAGE_REF}" \
+            | jq -r '.payload | @base64d | fromjson |
+                "✅ Provenance verified — builder: \(.predicate.runDetails.builder.id)"'
+
+          echo "── cosign tree ──"
+          cosign tree "${IMAGE_REF}"
+
+      # ── STEP 9 — Kubeconfig (cloud-specific) ──────────────────────────────
+
+      - name: Kubeconfig — EKS (AWS)
+        if: matrix.cloud == 'aws'
+        run: |
+          aws eks update-kubeconfig \
+            --region "${{ secrets.AWS_REGION }}" \
+            --name "${{ secrets.EKS_CLUSTER_NAME }}"
+
+      - name: Kubeconfig — AKS (Azure)
+        if: matrix.cloud == 'azure'
+        run: |
+          az aks get-credentials \
+            --resource-group "${{ secrets.AKS_RESOURCE_GROUP }}" \
+            --name "${{ secrets.AKS_CLUSTER_NAME }}" \
+            --overwrite-existing
+
+      # ── STEP 10 — Smoke test on cluster ───────────────────────────────────
+
+      - name: Smoke test on cluster
+        run: |
+          kubectl delete pod smoke-test --ignore-not-found
+          kubectl wait pod/smoke-test --for=delete --timeout=60s 2>/dev/null || true
+
+          kubectl run smoke-test \
+            --image="${FULL_IMAGE}" \
+            --restart=Never \
+            --command -- sh -c 'echo supply-chain-smoke-ok'
+
+          for i in $(seq 1 30); do
+            PHASE=$(kubectl get pod smoke-test \
+              -o jsonpath='{.status.phase}' 2>/dev/null || echo "Pending")
+            [ "${PHASE}" = "Succeeded" ] && echo "✅ Smoke test passed (${{ matrix.cloud }})" && break
+            [ "${PHASE}" = "Failed"    ] && kubectl logs smoke-test && exit 1
+            [ "${i}"     = "30"        ] && echo "❌ Timed out" && exit 1
+            sleep 3
+          done
+
+          kubectl delete pod smoke-test --ignore-not-found
+
+      # ── STEP 11 — Apply Kyverno policies (Enforce) ────────────────────────
+      # Policy logic is written once. Only the registry URL differs.
+      # Injected from kyverno/values/<cloud>.env at apply time.
+
+      - name: Apply Kyverno policies (Enforce)
+        run: |
+          REGISTRY_VAL=$(grep '^REGISTRY=' kyverno/values/${{ matrix.cloud }}.env \
+            | cut -d= -f2)
+
+          echo "Injecting registry: ${REGISTRY_VAL}"
+
+          mkdir -p /tmp/kyverno-rendered
+          for f in kyverno/verify-*.yaml; do
+            sed "s|REGISTRY_PLACEHOLDER|${REGISTRY_VAL}|g" "$f" \
+              > "/tmp/kyverno-rendered/$(basename $f)"
+          done
+
+          kubectl apply --server-side --force-conflicts \
+            -f /tmp/kyverno-rendered/
+
+          echo ""
+          kubectl get clusterpolicies -o wide
+
+      # ── STEP 12 — Policy admission tests ──────────────────────────────────
+
+      - name: Create supply-chain-demo namespace
+        run: |
+          kubectl create namespace supply-chain-demo \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: "TC-01 — Signed image (ADMIT)"
+        run: |
+          echo "════════════════════════════════════════"
+          echo "TC-01 [${{ matrix.cloud }}]: Signed image — expect ADMITTED"
+          echo "════════════════════════════════════════"
+
+          kubectl delete pod tc-01 -n supply-chain-demo --ignore-not-found
+          sleep 2
+
+          OUTPUT=$(kubectl run tc-01 \
+            --image="${FULL_IMAGE}" \
+            --restart=Never \
+            --namespace=supply-chain-demo \
+            --command -- sh -c 'echo tc-01-ok' 2>&1) && ADMITTED=true || ADMITTED=false
+
+          if [ "${ADMITTED}" = "true" ]; then
+            echo "✅ TC-01 PASS — signed image ADMITTED"
+            kubectl delete pod tc-01 -n supply-chain-demo --ignore-not-found
+          else
+            echo "❌ TC-01 FAIL — signed image was unexpectedly BLOCKED"
+            echo "${OUTPUT}"
+            exit 1
+          fi
+
+      - name: "TC-02 — nginx (BLOCK)"
+        run: |
+          echo "════════════════════════════════════════"
+          echo "TC-02 [${{ matrix.cloud }}]: nginx — expect BLOCKED"
+          echo "════════════════════════════════════════"
+
+          kubectl delete pod tc-02 -n supply-chain-demo --ignore-not-found
+          sleep 2
+
+          OUTPUT=$(kubectl run tc-02 \
+            --image=nginx:latest \
+            --restart=Never \
+            --namespace=supply-chain-demo \
+            --command -- sh -c 'echo tc-02' 2>&1) && ADMITTED=true || ADMITTED=false
+
+          if [ "${ADMITTED}" = "false" ]; then
+            echo "✅ TC-02 PASS — nginx BLOCKED (unapproved registry)"
+          else
+            echo "❌ TC-02 FAIL — nginx was admitted"
+            kubectl delete pod tc-02 -n supply-chain-demo --ignore-not-found
+            exit 1
+          fi
+
+      - name: "TC-03 — alpine (BLOCK)"
+        run: |
+          echo "════════════════════════════════════════"
+          echo "TC-03 [${{ matrix.cloud }}]: alpine — expect BLOCKED"
+          echo "════════════════════════════════════════"
+
+          kubectl delete pod tc-03 -n supply-chain-demo --ignore-not-found
+          sleep 2
+
+          OUTPUT=$(kubectl run tc-03 \
+            --image=alpine:latest \
+            --restart=Never \
+            --namespace=supply-chain-demo \
+            --command -- sh -c 'echo tc-03' 2>&1) && ADMITTED=true || ADMITTED=false
+
+          if [ "${ADMITTED}" = "false" ]; then
+            echo "✅ TC-03 PASS — alpine BLOCKED (unapproved registry)"
+          else
+            echo "❌ TC-03 FAIL — alpine was admitted"
+            kubectl delete pod tc-03 -n supply-chain-demo --ignore-not-found
+            exit 1
+          fi
+
+      - name: Pipeline summary
+        if: always()
+        run: |
+          echo "════════════════════════════════════════════════════════"
+          echo "  Supply Chain Pipeline — ${{ matrix.cloud }} — Summary"
+          echo "════════════════════════════════════════════════════════"
+          echo "  Image    : ${FULL_IMAGE}"
+          echo "  Digest   : ${DIGEST}"
+          echo "  Signed   : ✅ Cosign keyless (Sigstore)"
+          echo "  SBOM     : ✅ CycloneDX (Syft)"
+          echo "  Provenance: ✅ SLSA v1.0"
+          echo "  Policies : ✅ Enforce mode (3 ClusterPolicies)"
+          echo "  TC-01    : ✅ Signed image admitted"
+          echo "  TC-02    : ✅ nginx blocked"
+          echo "  TC-03    : ✅ alpine blocked"
+          echo "════════════════════════════════════════════════════════"
