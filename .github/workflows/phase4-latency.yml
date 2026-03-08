@@ -197,6 +197,7 @@ jobs:
                 | map(select(.imageTags != null))
                 | map(select(.imageTags[] | test("^sha256") | not))
                 | map(select(.imageTags[] | test("-")))
+                | map(select(.imageTags[] | test("^(attack|size-)") | not))
                 | sort_by(.imagePushedAt)
                 | last
                 | .imageTags[0]

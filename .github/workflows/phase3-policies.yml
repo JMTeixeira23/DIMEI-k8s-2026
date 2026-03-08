@@ -135,6 +135,9 @@ jobs:
                 | map(select(
                     .imageTags[] | test("-")
                   ))
+                | map(select(
+                    .imageTags[] | test("^(attack|size-)") | not
+                  ))
                 | sort_by(.imagePushedAt)
                 | last
                 | .imageTags[0]
