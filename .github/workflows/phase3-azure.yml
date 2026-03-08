@@ -1,11 +1,22 @@
 name: Phase 3 — Kyverno Policies (Azure)
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - 'kyverno/azure/**'      # policy change → re-apply immediately
   workflow_dispatch:
     inputs:
       mode:
         description: "Policy enforcement mode"
         required: true
+  workflow_call:                # triggered by Phase 2 Azure after new image is attested
+    inputs:
+      mode:
+        description: 'Policy enforcement mode'
+        required: false
+        default: 'Enforce'
+        type: string
         default: "Enforce"
         type: choice
         options: [Audit, Enforce]
@@ -40,7 +51,7 @@ jobs:
 
       - name: Set policy mode (${{ github.event.inputs.mode }})
         env:
-          MODE: ${{ github.event.inputs.mode }}
+          MODE: ${{ inputs.mode || github.event.inputs.mode || 'Enforce' }}
         run: |
           for f in kyverno/azure/verify-image-signature.yaml \
                    kyverno/azure/verify-sbom-cyclonedx.yaml \

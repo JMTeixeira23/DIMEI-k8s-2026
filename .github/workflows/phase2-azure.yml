@@ -1,12 +1,12 @@
 name: Phase 2 — Sign + SBOM + Provenance (Azure)
 
 on:
-  workflow_dispatch:
   push:
     branches: [main]
     paths:
       - 'docker/**'
-      - '.github/workflows/phase2-azure.yml'
+  workflow_dispatch:
+  workflow_call:  # triggered by phase1-azure on successful image build
 
 permissions:
   id-token: write
@@ -322,3 +322,11 @@ jobs:
             { echo "❌ Failed: ${PHASE}"; exit 1; }
 
           kubectl delete pod smoke-test-p2 --ignore-not-found
+
+  call-phase3:
+    name: Enforce Policies on New Image
+    needs: smoke-test          # only after full attestation + smoke test passes
+    uses: ./.github/workflows/phase3-azure.yml
+    secrets: inherit
+    with:
+      mode: Enforce
