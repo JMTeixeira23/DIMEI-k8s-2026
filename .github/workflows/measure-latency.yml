@@ -285,62 +285,76 @@ jobs:
       # ── Aggregate results ─────────────────────────────────────────────────
 
       - name: Compute statistics and print results
+        env:
+          CLOUD: ${{ matrix.cloud }}
+          ITERATIONS: ${{ github.event.inputs.iterations }}
         run: |
-          cat /tmp/baseline.csv /tmp/audit.csv /tmp/enforce.csv \
-            | grep -v "^condition" > /tmp/all-raw.csv
+          # Merge CSVs — skip header lines and blank lines
+          grep -h -v "^condition" /tmp/baseline.csv /tmp/audit.csv /tmp/enforce.csv \
+            | grep -v "^$" > /tmp/all-raw.csv
 
-          python3 - << 'PYEOF'
-          import csv, statistics, os
+          echo "=== raw CSV preview ===" && head -6 /tmp/all-raw.csv
 
-          cloud = "${{ matrix.cloud }}"
-          rows = {}
-          with open("/tmp/all-raw.csv") as f:
-            for line in f:
-              line = line.strip()
-              if not line:          # skip blank lines
-                continue
-              parts = line.split(",")
-              if len(parts) != 2:   # skip malformed lines
-                continue
-              cond, val = parts
-              if not val.isdigit(): # skip non-numeric values
-                continue
-              rows.setdefault(cond, []).append(int(val))
+          # Write Python to a file to avoid heredoc indentation issues
+          cat > /tmp/stats.py << 'SCRIPTEOF'
+import statistics, os, sys
 
-          print(f"\n{'='*65}")
-          print(f"  Admission Latency — {cloud.upper()} (n=${{ github.event.inputs.iterations }})")
-          print(f"{'='*65}")
-          print(f"{'condition':<12} {'n':>4} {'mean':>8} {'median':>8} {'stdev':>8} {'p95':>8}")
-          print("-"*65)
+cloud      = os.environ.get("CLOUD", "unknown")
+iterations = os.environ.get("ITERATIONS", "30")
 
-          results = []
-          for cond in ["baseline", "audit", "enforce"]:
-            vals = sorted(rows.get(cond, []))
-            if not vals: continue
-            mean   = statistics.mean(vals)
-            median = statistics.median(vals)
-            stdev  = statistics.stdev(vals)
-            p95    = vals[int(len(vals) * 0.95)]
-            print(f"{cond:<12} {len(vals):>4} {mean:>7.0f}ms {median:>7.0f}ms {stdev:>7.0f}ms {p95:>7.0f}ms")
-            results.append((cond, len(vals), round(mean), round(median), round(stdev), p95))
+rows = {}
+with open("/tmp/all-raw.csv") as f:
+    for raw in f:
+        raw = raw.strip()
+        if not raw:
+            continue
+        parts = raw.split(",")
+        if len(parts) != 2:
+            continue
+        cond, val = parts[0].strip(), parts[1].strip()
+        if not val.lstrip("-").isdigit():
+            continue
+        rows.setdefault(cond, []).append(int(val))
 
-          baseline_mean = next(r[2] for r in results if r[0] == "baseline")
-          enforce_mean  = next(r[2] for r in results if r[0] == "enforce")
-          overhead = enforce_mean - baseline_mean
-          pct      = overhead / baseline_mean * 100
+if not rows:
+    print("ERROR: no data rows parsed — check CSV files")
+    sys.exit(1)
 
-          print("-"*65)
-          print(f"Kyverno overhead: +{overhead}ms (+{pct:.1f}%)")
-          print(f"{'='*65}\n")
+print("\n" + "="*65)
+print(f"  Admission Latency -- {cloud.upper()} (n={iterations})")
+print("="*65)
+print(f"{'condition':<12} {'n':>4} {'mean':>8} {'median':>8} {'stdev':>8} {'p95':>8}")
+print("-"*65)
 
-          # Write CSV for thesis table
-          with open(f"/tmp/latency-{cloud}.csv", "w") as f:
-            f.write("cloud,condition,n,mean_ms,median_ms,stdev_ms,p95_ms\n")
-            for r in results:
-              f.write(f"{cloud},{r[0]},{r[1]},{r[2]},{r[3]},{r[4]},{r[5]}\n")
+results = []
+for cond in ["baseline", "audit", "enforce"]:
+    vals = sorted(rows.get(cond, []))
+    if not vals:
+        print(f"{cond:<12}  no data")
+        continue
+    mean   = statistics.mean(vals)
+    median = statistics.median(vals)
+    stdev  = statistics.stdev(vals) if len(vals) > 1 else 0.0
+    p95    = vals[min(int(len(vals) * 0.95), len(vals) - 1)]
+    print(f"{cond:<12} {len(vals):>4} {mean:>7.0f}ms {median:>7.0f}ms {stdev:>7.0f}ms {p95:>7.0f}ms")
+    results.append((cond, len(vals), round(mean), round(median), round(stdev), p95))
 
-          print(f"CSV saved to /tmp/latency-{cloud}.csv")
-          PYEOF
+b = next((r for r in results if r[0] == "baseline"), None)
+e = next((r for r in results if r[0] == "enforce"),  None)
+if b and e:
+    overhead = e[2] - b[2]
+    pct      = overhead / b[2] * 100
+    print("-"*65)
+    print(f"Kyverno overhead: +{overhead}ms (+{pct:.1f}%)")
+print("="*65)
+
+with open(f"/tmp/latency-{cloud}.csv", "w") as f:
+    f.write("cloud,condition,n,mean_ms,median_ms,stdev_ms,p95_ms\n")
+    for r in results:
+        f.write(f"{cloud},{r[0]},{r[1]},{r[2]},{r[3]},{r[4]},{r[5]}\n")
+print(f"CSV saved: /tmp/latency-{cloud}.csv")
+SCRIPTEOF
+          python3 /tmp/stats.py
 
       - name: Upload latency CSV
         uses: actions/upload-artifact@v4
@@ -354,11 +368,12 @@ jobs:
         run: kubectl delete pod latency-probe --ignore-not-found
 
   # ─────────────────────────────────────────────────────────────────────────────
+
+  # ─────────────────────────────────────────────────────────────────────────────
   # JOB 2 — IMAGE SIZE vs ADMISSION LATENCY
   # Hypothesis: Kyverno admission cost is O(1) w.r.t. image size.
   # Kyverno verifies the digest against Rekor — it never pulls image layers.
   # Four images: small (~5MB), medium (~30MB), large (~120MB), xlarge (~400MB)
-  # All built, signed, SBOM + provenance attested in parallel, then measured.
   # ─────────────────────────────────────────────────────────────────────────────
 
   build-size-images:
@@ -366,7 +381,6 @@ jobs:
     runs-on: ubuntu-latest
     environment: ${{ matrix.cloud }}
     needs: measure
-
     strategy:
       fail-fast: false
       matrix:
@@ -383,11 +397,11 @@ jobs:
           SELECTED="${{ inputs.cloud }}"
           THIS="${{ matrix.cloud }}"
           if [ "${SELECTED}" != "both" ] && [ "${SELECTED}" != "${THIS}" ]; then
-            echo "Skipping ${THIS} — selected: ${SELECTED}"
+            echo "Skipping ${THIS} -- selected: ${SELECTED}"
             exit 0
           fi
 
-      - name: Auth — AWS
+      - name: Auth -- AWS
         if: matrix.cloud == 'aws'
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -395,7 +409,7 @@ jobs:
           aws-region: ${{ secrets.AWS_REGION }}
           role-session-name: size-build-${{ github.run_id }}
 
-      - name: Auth — Azure
+      - name: Auth -- Azure
         if: matrix.cloud == 'azure'
         uses: azure/login@v2
         with:
@@ -403,12 +417,12 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Registry login — ECR
+      - name: Registry login -- ECR
         if: matrix.cloud == 'aws'
         id: ecr-login
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Registry login — ACR
+      - name: Registry login -- ACR
         if: matrix.cloud == 'azure'
         run: az acr login --name "${{ secrets.ACR_LOGIN_SERVER }}"
 
@@ -416,57 +430,60 @@ jobs:
         run: |
           if [ "${{ matrix.cloud }}" = "aws" ]; then
             echo "REGISTRY=${{ steps.ecr-login.outputs.registry }}" >> $GITHUB_ENV
-            echo "REPO=${{ secrets.ECR_REPO_NAME }}"               >> $GITHUB_ENV
+            echo "REPO=${{ secrets.ECR_REPO_NAME }}" >> $GITHUB_ENV
           else
-            echo "REGISTRY=${{ secrets.ACR_LOGIN_SERVER }}"        >> $GITHUB_ENV
-            echo "REPO=${{ secrets.ACR_REPO_NAME }}"               >> $GITHUB_ENV
+            echo "REGISTRY=${{ secrets.ACR_LOGIN_SERVER }}" >> $GITHUB_ENV
+            echo "REPO=${{ secrets.ACR_REPO_NAME }}" >> $GITHUB_ENV
           fi
 
-      - name: Install Cosign + Syft
+      - name: Install Cosign and Syft
         run: |
-          curl -sSfL https://github.com/sigstore/cosign/releases/download/v2.2.3/cosign-linux-amd64             -o /usr/local/bin/cosign && chmod +x /usr/local/bin/cosign
-          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh             | sh -s -- -b /usr/local/bin v0.105.1
+          curl -sSfL https://github.com/sigstore/cosign/releases/download/v2.2.3/cosign-linux-amd64 \
+            -o /usr/local/bin/cosign && chmod +x /usr/local/bin/cosign
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh \
+            | sh -s -- -b /usr/local/bin v0.105.1
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
       - name: Build, push, sign and attest all size images
         run: |
-          SIZES="small medium large xlarge"
           mkdir -p /tmp/size-refs
 
-          for SIZE in ${SIZES}; do
+          for SIZE in small medium large xlarge; do
             TAG="size-${SIZE}-${{ github.run_id }}"
             IMAGE="${REGISTRY}/${REPO}:${TAG}"
 
-            echo "▶ Building ${SIZE}..."
-            docker buildx build               --tag "${IMAGE}"               --push               --provenance=false               --metadata-file /tmp/meta-${SIZE}.json               docker/${SIZE}/
+            echo "Building ${SIZE}..."
+            docker buildx build \
+              --tag "${IMAGE}" \
+              --push \
+              --provenance=false \
+              --metadata-file /tmp/meta-${SIZE}.json \
+              docker/${SIZE}/
 
             DIGEST=$(jq -r '."containerimage.digest"' /tmp/meta-${SIZE}.json)
             IMAGE_REF="${REGISTRY}/${REPO}@${DIGEST}"
 
-            # Sign
             cosign sign --yes "${IMAGE_REF}"
 
-            # SBOM
             syft "${IMAGE_REF}" -o cyclonedx-json=/tmp/sbom-${SIZE}.json
-            cosign attest --yes               --type cyclonedx               --predicate /tmp/sbom-${SIZE}.json               "${IMAGE_REF}"
+            cosign attest --yes \
+              --type cyclonedx \
+              --predicate /tmp/sbom-${SIZE}.json \
+              "${IMAGE_REF}"
 
-            # Provenance
-            python3 -c "
-          import json, os
-          prov = {
-            'buildDefinition': {'buildType': 'https://slsa.dev/container-based-build/v0.1',
-              'externalParameters': {'image': '${IMAGE}', 'size': '${SIZE}'}},
-            'runDetails': {'builder': {'id': 'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'},
-              'metadata': {'invocationId': '${{ github.run_id }}'}}
-          }
-          json.dump(prov, open('/tmp/prov-${SIZE}.json', 'w'))
-          "
-            cosign attest --yes               --type slsaprovenance1               --predicate /tmp/prov-${SIZE}.json               "${IMAGE_REF}"
+            printf '{"buildDefinition":{"buildType":"https://slsa.dev/container-based-build/v0.1",' > /tmp/prov-${SIZE}.json
+            printf '"externalParameters":{"size":"%s"}},' "${SIZE}" >> /tmp/prov-${SIZE}.json
+            printf '"runDetails":{"builder":{"id":"https://github.com/%s/actions/runs/%s"}}}' \
+              "${{ github.repository }}" "${{ github.run_id }}" >> /tmp/prov-${SIZE}.json
+            cosign attest --yes \
+              --type slsaprovenance1 \
+              --predicate /tmp/prov-${SIZE}.json \
+              "${IMAGE_REF}"
 
             echo "${IMAGE_REF}" > /tmp/size-refs/${SIZE}.txt
-            echo "✅ ${SIZE}: ${IMAGE_REF}"
+            echo "Done: ${SIZE} -> ${IMAGE_REF}"
           done
 
       - name: Upload size image refs
@@ -481,7 +498,6 @@ jobs:
     runs-on: ubuntu-latest
     environment: ${{ matrix.cloud }}
     needs: build-size-images
-
     strategy:
       fail-fast: false
       matrix:
@@ -495,11 +511,11 @@ jobs:
           SELECTED="${{ inputs.cloud }}"
           THIS="${{ matrix.cloud }}"
           if [ "${SELECTED}" != "both" ] && [ "${SELECTED}" != "${THIS}" ]; then
-            echo "Skipping ${THIS} — selected: ${SELECTED}"
+            echo "Skipping ${THIS} -- selected: ${SELECTED}"
             exit 0
           fi
 
-      - name: Auth — AWS
+      - name: Auth -- AWS
         if: matrix.cloud == 'aws'
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -507,7 +523,7 @@ jobs:
           aws-region: ${{ secrets.AWS_REGION }}
           role-session-name: size-measure-${{ github.run_id }}
 
-      - name: Auth — Azure
+      - name: Auth -- Azure
         if: matrix.cloud == 'azure'
         uses: azure/login@v2
         with:
@@ -515,15 +531,20 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Kubeconfig — EKS
+      - name: Kubeconfig -- EKS
         if: matrix.cloud == 'aws'
         run: |
-          aws eks update-kubeconfig             --region "${{ secrets.AWS_REGION }}"             --name "${{ secrets.EKS_CLUSTER_NAME }}"
+          aws eks update-kubeconfig \
+            --region "${{ secrets.AWS_REGION }}" \
+            --name "${{ secrets.EKS_CLUSTER_NAME }}"
 
-      - name: Kubeconfig — AKS
+      - name: Kubeconfig -- AKS
         if: matrix.cloud == 'azure'
         run: |
-          az aks get-credentials             --resource-group "${{ secrets.AKS_RESOURCE_GROUP }}"             --name "${{ secrets.AKS_CLUSTER_NAME }}"             --overwrite-existing
+          az aks get-credentials \
+            --resource-group "${{ secrets.AKS_RESOURCE_GROUP }}" \
+            --name "${{ secrets.AKS_CLUSTER_NAME }}" \
+            --overwrite-existing
 
       - name: Download size image refs
         uses: actions/download-artifact@v4
@@ -534,25 +555,32 @@ jobs:
       - name: Measure admission latency per image size
         run: |
           N=${{ github.event.inputs.size_iterations }}
-          SIZES="small medium large xlarge"
-          APPROX_MB="5 30 120 400"
-          echo "cloud,size,approx_mb,n,latency_ms" > /tmp/size-latency-raw.csv
+          echo "cloud,size,approx_mb,latency_ms" > /tmp/size-latency-raw.csv
 
-          i=0
-          for SIZE in ${SIZES}; do
-            MB=$(echo ${APPROX_MB} | cut -d' ' -f$((i+1)))
+          for SIZE in small medium large xlarge; do
+            case ${SIZE} in
+              small)  MB=5   ;;
+              medium) MB=30  ;;
+              large)  MB=120 ;;
+              xlarge) MB=400 ;;
+            esac
+
             IMAGE_REF=$(cat /tmp/size-refs/${SIZE}.txt)
-            echo "▶ Measuring ${SIZE} (~${MB}MB) — ${N} iterations..."
+            echo "Measuring ${SIZE} (~${MB}MB) -- ${N} iterations..."
 
             for j in $(seq 1 ${N}); do
               kubectl delete pod size-probe --ignore-not-found 2>/dev/null
               kubectl wait pod/size-probe --for=delete --timeout=30s 2>/dev/null || true
 
               START=$(date +%s%3N)
-              kubectl run size-probe                 --image="${IMAGE_REF}"                 --restart=Never                 --command -- sh -c 'exit 0' 2>/dev/null
+              kubectl run size-probe \
+                --image="${IMAGE_REF}" \
+                --restart=Never \
+                --command -- sh -c 'exit 0' 2>/dev/null
 
               for k in $(seq 1 20); do
-                PHASE=$(kubectl get pod size-probe                   -o jsonpath='{.status.phase}' 2>/dev/null || echo "Pending")
+                PHASE=$(kubectl get pod size-probe \
+                  -o jsonpath='{.status.phase}' 2>/dev/null || echo "Pending")
                 [ "${PHASE}" = "Succeeded" ] || [ "${PHASE}" = "Failed" ] && break
                 sleep 0.5
               done
@@ -561,58 +589,70 @@ jobs:
               echo "${{ matrix.cloud }},${SIZE},${MB},$((END - START))" >> /tmp/size-latency-raw.csv
               sleep 1
             done
-            i=$((i+1))
           done
 
       - name: Compute size statistics
+        env:
+          CLOUD: ${{ matrix.cloud }}
+          ITERATIONS: ${{ github.event.inputs.size_iterations }}
         run: |
-          CLOUD="${{ matrix.cloud }}"
-          python3 - << 'PYEOF'
-          import csv, statistics
+          cat > /tmp/size_stats.py << 'SCRIPTEOF'
+import statistics, os, sys, csv
 
-          cloud = "${{ matrix.cloud }}"
-          rows = {}
-          approx = {}
+cloud      = os.environ.get("CLOUD", "unknown")
+iterations = os.environ.get("ITERATIONS", "20")
 
-          with open("/tmp/size-latency-raw.csv") as f:
-            reader = csv.DictReader(f)
-            for r in reader:
-              size = r['size']
-              rows.setdefault(size, []).append(int(r['latency_ms']))
-              approx[size] = r['approx_mb']
+rows   = {}
+approx = {}
+with open("/tmp/size-latency-raw.csv") as f:
+    reader = csv.DictReader(f)
+    for r in reader:
+        size = r.get("size", "").strip()
+        val  = r.get("latency_ms", "").strip()
+        mb   = r.get("approx_mb", "?").strip()
+        if not size or not val or not val.lstrip("-").isdigit():
+            continue
+        rows.setdefault(size, []).append(int(val))
+        approx[size] = mb
 
-          print(f"{'='*70}")
-          print(f"  Image Size vs Admission Latency — {cloud.upper()}")
-          print(f"  Hypothesis: latency is flat across sizes (Kyverno is O(1))")
-          print(f"{'='*70}")
-          print(f"{'size':<10} {'~MB':>6} {'n':>4} {'mean':>8} {'median':>8} {'stdev':>8} {'p95':>8}")
-          print("-"*70)
+if not rows:
+    print("ERROR: no data parsed from size CSV")
+    sys.exit(1)
 
-          results = []
-          for size in ['small', 'medium', 'large', 'xlarge']:
-            vals = sorted(rows.get(size, []))
-            if not vals: continue
-            mean   = statistics.mean(vals)
-            median = statistics.median(vals)
-            stdev  = statistics.stdev(vals)
-            p95    = vals[int(len(vals)*0.95)]
-            mb     = approx.get(size, '?')
-            print(f"{size:<10} {mb:>6} {len(vals):>4} {mean:>7.0f}ms {median:>7.0f}ms {stdev:>7.0f}ms {p95:>7.0f}ms")
-            results.append((size, mb, len(vals), round(mean), round(median), round(stdev), p95))
+print("\n" + "="*70)
+print(f"  Image Size vs Admission Latency -- {cloud.upper()}")
+print(f"  Hypothesis: latency is flat (Kyverno admission is O(1))")
+print("="*70)
+print(f"{'size':<10} {'~MB':>6} {'n':>4} {'mean':>8} {'median':>8} {'stdev':>8} {'p95':>8}")
+print("-"*70)
 
-          means = [r[3] for r in results]
-          spread = max(means) - min(means)
-          print("-"*70)
-          print(f"Mean spread: {spread}ms across all sizes")
-          verdict = "SUPPORTED" if spread < 100 else "NOT supported"
-          print(f"Hypothesis O(1): {verdict}")
-          print(f"{'='*70}")
+results = []
+for size in ["small", "medium", "large", "xlarge"]:
+    vals = sorted(rows.get(size, []))
+    if not vals:
+        continue
+    mean   = statistics.mean(vals)
+    median = statistics.median(vals)
+    stdev  = statistics.stdev(vals) if len(vals) > 1 else 0.0
+    p95    = vals[min(int(len(vals) * 0.95), len(vals) - 1)]
+    mb     = approx.get(size, "?")
+    print(f"{size:<10} {mb:>6} {len(vals):>4} {mean:>7.0f}ms {median:>7.0f}ms {stdev:>7.0f}ms {p95:>7.0f}ms")
+    results.append((size, mb, len(vals), round(mean), round(median), round(stdev), p95))
 
-          with open(f"/tmp/size-latency-{cloud}.csv", "w") as f:
-            f.write("cloud,size,approx_mb,n,mean_ms,median_ms,stdev_ms,p95_ms")
-            for r in results:
-              f.write(f"{cloud},{r[0]},{r[1]},{r[2]},{r[3]},{r[4]},{r[5]},{r[6]}")
-          PYEOF
+if results:
+    means  = [r[3] for r in results]
+    spread = max(means) - min(means)
+    print("-"*70)
+    print(f"Mean spread: {spread}ms -- Hypothesis O(1): {'SUPPORTED' if spread < 100 else 'NOT supported'}")
+print("="*70)
+
+with open(f"/tmp/size-latency-{cloud}.csv", "w") as f:
+    f.write("cloud,size,approx_mb,n,mean_ms,median_ms,stdev_ms,p95_ms\n")
+    for r in results:
+        f.write(f"{cloud},{r[0]},{r[1]},{r[2]},{r[3]},{r[4]},{r[5]},{r[6]}\n")
+print(f"CSV saved: /tmp/size-latency-{cloud}.csv")
+SCRIPTEOF
+          python3 /tmp/size_stats.py
 
       - name: Upload size latency CSV
         uses: actions/upload-artifact@v4
