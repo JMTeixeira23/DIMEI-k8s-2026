@@ -296,7 +296,15 @@ jobs:
           rows = {}
           with open("/tmp/all-raw.csv") as f:
             for line in f:
-              cond, val = line.strip().split(",")
+              line = line.strip()
+              if not line:          # skip blank lines
+                continue
+              parts = line.split(",")
+              if len(parts) != 2:   # skip malformed lines
+                continue
+              cond, val = parts
+              if not val.isdigit(): # skip non-numeric values
+                continue
               rows.setdefault(cond, []).append(int(val))
 
           print(f"\n{'='*65}")
