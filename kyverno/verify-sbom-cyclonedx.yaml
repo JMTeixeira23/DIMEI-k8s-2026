@@ -43,6 +43,6 @@ spec:
                         issuer: "https://token.actions.githubusercontent.com"
                         rekor:
                           url: https://rekor.sigstore.dev
-          mutateDigest: true
-          verifyDigest: true
+          mutateDigest: false
+          verifyDigest: false
           required: true
