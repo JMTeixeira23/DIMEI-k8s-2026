@@ -22,7 +22,7 @@ spec:
         any:
           - resources:
               kinds: [Pod]
-              namespaces: ["default", "supply-chain-demo"]
+              namespaces: ["supply-chain-demo"]
       validate:
         message: "Only images from the approved registry (REGISTRY_PLACEHOLDER) are permitted."
         deny:
@@ -37,7 +37,7 @@ spec:
         any:
           - resources:
               kinds: [Pod]
-              namespaces: ["default", "supply-chain-demo"]
+              namespaces: ["supply-chain-demo"]
       verifyImages:
         - imageReferences:
             - "REGISTRY_PLACEHOLDER/*"
