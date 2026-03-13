@@ -349,13 +349,17 @@ jobs:
 
       - name: Smoke test on cluster
         run: |
+          # Reconstruct digest ref — IMAGE_REF may not persist across steps
+          DIGEST_REF="${REGISTRY}/${REPO}@${DIGEST}"
+          echo "Using: ${DIGEST_REF}"
+
           # Run in supply-chain-demo — default namespace excluded from policies
           kubectl delete pod smoke-test -n supply-chain-demo --ignore-not-found
           kubectl wait pod/smoke-test -n supply-chain-demo \
             --for=delete --timeout=60s 2>/dev/null || true
 
           kubectl run smoke-test \
-            --image="${IMAGE_REF}" \
+            --image="${DIGEST_REF}" \
             --restart=Never \
             --namespace=supply-chain-demo \
             --command -- sh -c 'echo supply-chain-smoke-ok'
@@ -431,8 +435,9 @@ jobs:
           kubectl delete pod tc-01 -n supply-chain-demo --ignore-not-found
           sleep 2
 
+          DIGEST_REF="${REGISTRY}/${REPO}@${DIGEST}"
           OUTPUT=$(kubectl run tc-01 \
-            --image="${IMAGE_REF}" \
+            --image="${DIGEST_REF}" \
             --restart=Never \
             --namespace=supply-chain-demo \
             --command -- sh -c 'echo tc-01-ok' 2>&1) && ADMITTED=true || ADMITTED=false
