@@ -353,7 +353,7 @@ jobs:
           kubectl wait pod/smoke-test --for=delete --timeout=60s 2>/dev/null || true
 
           kubectl run smoke-test \
-            --image="${FULL_IMAGE}" \
+            --image="${IMAGE_REF}" \
             --restart=Never \
             --command -- sh -c 'echo supply-chain-smoke-ok'
 
@@ -429,7 +429,7 @@ jobs:
           sleep 2
 
           OUTPUT=$(kubectl run tc-01 \
-            --image="${FULL_IMAGE}" \
+            --image="${IMAGE_REF}" \
             --restart=Never \
             --namespace=supply-chain-demo \
             --command -- sh -c 'echo tc-01-ok' 2>&1) && ADMITTED=true || ADMITTED=false
