@@ -349,11 +349,25 @@ jobs:
 
       - name: Smoke test on cluster
         run: |
-          # Reconstruct digest ref — IMAGE_REF may not persist across steps
-          DIGEST_REF="${REGISTRY}/${REPO}@${DIGEST}"
+          # Fetch digest fresh from registry
+          if [ "${{ matrix.cloud }}" = "aws" ]; then
+            LIVE_DIGEST=$(aws ecr describe-images \
+              --repository-name "${REPO}" \
+              --region "${{ secrets.AWS_REGION }}" \
+              --image-ids imageTag="${IMAGE_TAG}" \
+              --query 'imageDetails[0].imageDigest' \
+              --output text)
+          else
+            LIVE_DIGEST=$(az acr manifest list-metadata \
+              --registry "${{ secrets.ACR_LOGIN_SERVER }}" \
+              --name "${REPO}" \
+              --query "[?tags[?@ == '${IMAGE_TAG}']].digest | [0]" \
+              --output tsv)
+          fi
+          DIGEST_REF="${REGISTRY}/${REPO}@${LIVE_DIGEST}"
           echo "Using: ${DIGEST_REF}"
 
-          # Run in supply-chain-demo — default namespace excluded from policies
+          # Run in supply-chain-demo namespace
           kubectl delete pod smoke-test -n supply-chain-demo --ignore-not-found
           kubectl wait pod/smoke-test -n supply-chain-demo \
             --for=delete --timeout=60s 2>/dev/null || true
@@ -432,10 +446,34 @@ jobs:
           echo "TC-01 [${{ matrix.cloud }}]: Signed image — expect ADMITTED"
           echo "════════════════════════════════════════"
 
+          # Debug — show what env vars we have
+          echo "REGISTRY=${REGISTRY}"
+          echo "REPO=${REPO}"
+          echo "DIGEST=${DIGEST}"
+          echo "FULL_IMAGE=${FULL_IMAGE}"
+
+          # Fetch digest fresh from registry to avoid env var persistence issues
+          if [ "${{ matrix.cloud }}" = "aws" ]; then
+            LIVE_DIGEST=$(aws ecr describe-images \
+              --repository-name "${REPO}" \
+              --region "${{ secrets.AWS_REGION }}" \
+              --image-ids imageTag="${IMAGE_TAG}" \
+              --query 'imageDetails[0].imageDigest' \
+              --output text 2>/dev/null || echo "${DIGEST}")
+          else
+            LIVE_DIGEST=$(az acr manifest list-metadata \
+              --registry "${{ secrets.ACR_LOGIN_SERVER }}" \
+              --name "${REPO}" \
+              --query "[?tags[?@ == '${IMAGE_TAG}']].digest | [0]" \
+              --output tsv 2>/dev/null || echo "${DIGEST}")
+          fi
+
+          DIGEST_REF="${REGISTRY}/${REPO}@${LIVE_DIGEST}"
+          echo "Using digest ref: ${DIGEST_REF}"
+
           kubectl delete pod tc-01 -n supply-chain-demo --ignore-not-found
           sleep 2
 
-          DIGEST_REF="${REGISTRY}/${REPO}@${DIGEST}"
           OUTPUT=$(kubectl run tc-01 \
             --image="${DIGEST_REF}" \
             --restart=Never \
