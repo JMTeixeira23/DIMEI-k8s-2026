@@ -66,6 +66,7 @@ helm upgrade --install kyverno kyverno/kyverno \
   --set reportsController.replicas=1 \
   --set cleanupController.replicas=1 \
   --set failurePolicy=Ignore \
+  --set forceFailurePolicyIgnore=true \
   --set webhooksCleanup.enabled=false \
   --set "admissionController.serviceAccount.annotations.azure\\.workload\\.identity/client-id=${KYVERNO_CLIENT_ID}" \
   --set-string "admissionController.podLabels.azure\\.workload\\.identity/use=true" \
@@ -74,6 +75,51 @@ helm upgrade --install kyverno kyverno/kyverno \
   --wait
 
 echo "  ✅ Kyverno installed"
+
+# ── Patch admission controller to force all webhooks to Ignore ───────────────
+echo ""
+echo "▶ Patching admission controller with --forceFailurePolicyIgnore..."
+kubectl patch deployment kyverno-admission-controller -n kyverno --type=json \
+  -p='[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--forceFailurePolicyIgnore=true"}]' \
+  2>/dev/null || true
+kubectl rollout status deployment/kyverno-admission-controller \
+  -n kyverno --timeout=60s
+sleep 10
+# Delete the policy webhook — it targets only kyverno.io resources (not pods)
+# and Kyverno hardcodes it to Fail which blocks all kubectl operations
+kubectl delete mutatingwebhookconfiguration kyverno-policy-mutating-webhook-cfg \
+  --ignore-not-found
+echo "  ✅ Webhooks fixed"
+
+# ── Force webhooks to Ignore ─────────────────────────────────────────────────
+# The background controller reverts webhooks to Fail. Scale it down first,
+# patch all webhooks, then keep it down — it's only needed for background
+# scanning, not for admission enforcement which is what we need.
+echo ""
+echo "▶ Forcing webhook failurePolicy to Ignore..."
+
+# Scale down background + reports controllers so they stop reverting webhooks
+kubectl scale deployment kyverno-background-controller   -n "${KYVERNO_NS}" --replicas=0 2>/dev/null || true
+kubectl scale deployment kyverno-reports-controller   -n "${KYVERNO_NS}" --replicas=0 2>/dev/null || true
+sleep 5
+
+# Patch all mutating webhooks
+for cfg in $(kubectl get mutatingwebhookconfigurations   --no-headers -o name | grep kyverno); do
+  COUNT=$(kubectl get ${cfg} -o json | jq '.webhooks | length')
+  for i in $(seq 0 $((COUNT-1))); do
+    kubectl patch ${cfg} --type=json       -p="[{\"op\":\"replace\",\"path\":\"/webhooks/${i}/failurePolicy\",\"value\":\"Ignore\"}]"       2>/dev/null || true
+  done
+  echo "  ✅ Patched ${cfg}"
+done
+
+# Patch all validating webhooks
+for cfg in $(kubectl get validatingwebhookconfigurations   --no-headers -o name | grep kyverno); do
+  COUNT=$(kubectl get ${cfg} -o json | jq '.webhooks | length')
+  for i in $(seq 0 $((COUNT-1))); do
+    kubectl patch ${cfg} --type=json       -p="[{\"op\":\"replace\",\"path\":\"/webhooks/${i}/failurePolicy\",\"value\":\"Ignore\"}]"       2>/dev/null || true
+  done
+  echo "  ✅ Patched ${cfg}"
+done
 
 # ── Step 5: Suspend broken cleanup CronJobs ───────────────────────────────────
 echo ""
@@ -120,6 +166,10 @@ echo "▶ Creating namespaces..."
 kubectl create namespace supply-chain-demo \
   --dry-run=client -o yaml | kubectl apply -f -
 echo "  ✅ supply-chain-demo ready"
+
+# Exclude default namespace from Kyverno webhooks (used for smoke tests)
+kubectl label namespace default kyverno.io/exclude=always --overwrite
+echo "  ✅ default namespace excluded from Kyverno webhooks"
 
 # ── Step 9: Set all Kyverno webhooks to Ignore ───────────────────────────────
 echo ""
