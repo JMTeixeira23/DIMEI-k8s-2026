@@ -349,22 +349,6 @@ jobs:
 
       - name: Smoke test on cluster
         run: |
-          # Fetch digest fresh from registry
-          if [ "${{ matrix.cloud }}" = "aws" ]; then
-            LIVE_DIGEST=$(aws ecr describe-images \
-              --repository-name "${REPO}" \
-              --region "${{ secrets.AWS_REGION }}" \
-              --image-ids imageTag="${IMAGE_TAG}" \
-              --query 'imageDetails[0].imageDigest' \
-              --output text)
-          else
-            LIVE_DIGEST=$(az acr manifest list-metadata \
-              --registry "${{ secrets.ACR_LOGIN_SERVER }}" \
-              --name "${REPO}" \
-              --query "[?tags[?@ == '${IMAGE_TAG}']].digest | [0]" \
-              --output tsv)
-          fi
-          DIGEST_REF="${REGISTRY}/${REPO}@${LIVE_DIGEST}"
           echo "Using: ${DIGEST_REF}"
 
           # Run in supply-chain-demo namespace
@@ -435,6 +419,27 @@ jobs:
 
       # ── STEP 12 — Policy admission tests ──────────────────────────────────
 
+      - name: Resolve image digest for policy tests
+        run: |
+          # Kyverno needs digest-based refs to verify signatures without ECR access
+          if [ "${{ matrix.cloud }}" = "aws" ]; then
+            LIVE_DIGEST=$(aws ecr describe-images \
+              --repository-name "${REPO}" \
+              --region "${{ secrets.AWS_REGION }}" \
+              --image-ids imageTag="${IMAGE_TAG}" \
+              --query 'imageDetails[0].imageDigest' \
+              --output text)
+          else
+            LIVE_DIGEST=$(az acr manifest list-metadata \
+              --registry "${{ secrets.ACR_LOGIN_SERVER }}" \
+              --name "${REPO}" \
+              --query "[?tags[?@ == '${IMAGE_TAG}']].digest | [0]" \
+              --output tsv)
+          fi
+          echo "LIVE_DIGEST=${LIVE_DIGEST}" >> $GITHUB_ENV
+          echo "DIGEST_REF=${REGISTRY}/${REPO}@${LIVE_DIGEST}" >> $GITHUB_ENV
+          echo "Resolved: ${REGISTRY}/${REPO}@${LIVE_DIGEST}"
+
       - name: Create supply-chain-demo namespace
         run: |
           kubectl create namespace supply-chain-demo \
@@ -446,30 +451,7 @@ jobs:
           echo "TC-01 [${{ matrix.cloud }}]: Signed image — expect ADMITTED"
           echo "════════════════════════════════════════"
 
-          # Debug — show what env vars we have
-          echo "REGISTRY=${REGISTRY}"
-          echo "REPO=${REPO}"
-          echo "DIGEST=${DIGEST}"
-          echo "FULL_IMAGE=${FULL_IMAGE}"
-
-          # Fetch digest fresh from registry to avoid env var persistence issues
-          if [ "${{ matrix.cloud }}" = "aws" ]; then
-            LIVE_DIGEST=$(aws ecr describe-images \
-              --repository-name "${REPO}" \
-              --region "${{ secrets.AWS_REGION }}" \
-              --image-ids imageTag="${IMAGE_TAG}" \
-              --query 'imageDetails[0].imageDigest' \
-              --output text 2>/dev/null || echo "${DIGEST}")
-          else
-            LIVE_DIGEST=$(az acr manifest list-metadata \
-              --registry "${{ secrets.ACR_LOGIN_SERVER }}" \
-              --name "${REPO}" \
-              --query "[?tags[?@ == '${IMAGE_TAG}']].digest | [0]" \
-              --output tsv 2>/dev/null || echo "${DIGEST}")
-          fi
-
-          DIGEST_REF="${REGISTRY}/${REPO}@${LIVE_DIGEST}"
-          echo "Using digest ref: ${DIGEST_REF}"
+          echo "Using: ${DIGEST_REF}"
 
           kubectl delete pod tc-01 -n supply-chain-demo --ignore-not-found
           sleep 2
