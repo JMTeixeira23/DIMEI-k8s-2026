@@ -349,24 +349,27 @@ jobs:
 
       - name: Smoke test on cluster
         run: |
-          kubectl delete pod smoke-test --ignore-not-found
-          kubectl wait pod/smoke-test --for=delete --timeout=60s 2>/dev/null || true
+          # Run in supply-chain-demo — default namespace excluded from policies
+          kubectl delete pod smoke-test -n supply-chain-demo --ignore-not-found
+          kubectl wait pod/smoke-test -n supply-chain-demo \
+            --for=delete --timeout=60s 2>/dev/null || true
 
           kubectl run smoke-test \
             --image="${IMAGE_REF}" \
             --restart=Never \
+            --namespace=supply-chain-demo \
             --command -- sh -c 'echo supply-chain-smoke-ok'
 
           for i in $(seq 1 30); do
-            PHASE=$(kubectl get pod smoke-test \
+            PHASE=$(kubectl get pod smoke-test -n supply-chain-demo \
               -o jsonpath='{.status.phase}' 2>/dev/null || echo "Pending")
             [ "${PHASE}" = "Succeeded" ] && echo "✅ Smoke test passed (${{ matrix.cloud }})" && break
-            [ "${PHASE}" = "Failed"    ] && kubectl logs smoke-test && exit 1
+            [ "${PHASE}" = "Failed"    ] && kubectl logs smoke-test -n supply-chain-demo && exit 1
             [ "${i}"     = "30"        ] && echo "❌ Timed out" && exit 1
             sleep 3
           done
 
-          kubectl delete pod smoke-test --ignore-not-found
+          kubectl delete pod smoke-test -n supply-chain-demo --ignore-not-found
 
       # ── STEP 11 — Apply Kyverno policies (Enforce) ────────────────────────
       # Policy logic is written once. Only the registry URL differs.
