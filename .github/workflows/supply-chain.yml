@@ -323,6 +323,27 @@ jobs:
 
       - name: Apply Kyverno policies (Enforce)
         run: |
+          # ── Wait for Kyverno CRDs to exist ──────────────────────────────
+          echo "Waiting for Kyverno CRDs..."
+          for i in $(seq 1 30); do
+            if kubectl get crd clusterpolicies.kyverno.io >/dev/null 2>&1; then
+              echo "  ✅ CRDs ready"
+              break
+            fi
+            [ "${i}" = "30" ] && echo "❌ Kyverno CRDs never appeared" && exit 1
+            echo "  waiting... (${i}/30)"
+            sleep 10
+          done
+
+          # ── Wait for admission controller to be healthy ──────────────────
+          echo "Waiting for Kyverno admission controller..."
+          kubectl rollout status deployment/kyverno-admission-controller \
+            -n kyverno --timeout=120s
+
+          # ── Small buffer for webhook registration ────────────────────────
+          sleep 10
+
+          # ── Inject registry and apply ────────────────────────────────────
           REGISTRY_VAL=$(grep '^REGISTRY=' kyverno/values/${{ matrix.cloud }}.env \
             | cut -d= -f2)
 
