@@ -64,6 +64,7 @@ helm upgrade --install kyverno kyverno/kyverno \
   --set failurePolicy=Ignore \
   --set webhooksCleanup.enabled=false \
   --timeout 5m \
+  --no-hooks \
   --wait
 
 echo "  ✅ Kyverno installed"

@@ -1,45 +1,67 @@
-# Phase 1 — Infrastructure & Toolchain Bootstrap (AWS)
+# Multi-Cloud Kubernetes Supply Chain Security
 
-> **Thesis project:** Multi-cloud Kubernetes supply chain security using Cosign, Kyverno, and SLSA provenance.  
-> **Phase 1 scope:** AWS only (EKS + ECR). Azure (AKS + ACR) follows the same structure and will slot in via `terraform/azure/` and `env.azure` — no changes to scripts or Makefile required.
+> **Thesis project:** Multi-cloud Kubernetes supply chain security using Cosign, Kyverno, and SLSA provenance.
+> **Clouds:** AWS EKS + Azure AKS — unified pipeline, identical policies, parallel enforcement.
 
 ---
 
-## What this phase delivers
+## What this project delivers
 
-- EKS 1.29 cluster (1 node group, `t3.medium`) and ECR repository provisioned via Terraform
-- GitHub Actions CI authenticated to ECR via **OIDC federation** — no stored AWS credentials
-- Kyverno installed on EKS (ready for Phase 3 policies)
-- Smoke test: image built → pushed to ECR → signed with Cosign keyless → verified → deployed as a pod on EKS
+A **cloud-agnostic supply chain security framework** for Kubernetes with three layers:
+
+| Layer | What it is | Cloud-specific? |
+|-------|-----------|----------------|
+| **Policies** | 3 Kyverno ClusterPolicies — signature, SBOM, provenance | No — written once, registry URL injected at apply time |
+| **Pipeline** | One GitHub Actions workflow — matrix across clouds | No — only auth + registry login differ per cloud |
+| **Infrastructure** | Terraform for EKS + ECR (AWS) and AKS + ACR (Azure) | Yes — intentionally separate |
+
+Every `docker/` push triggers the full supply chain on **both clouds in parallel**:
+build → sign → SBOM → provenance → verify → smoke test → enforce policies → TC-01/02/03.
 
 ---
 
 ## Repository structure
 
 ```
-phase1/
-├── terraform/aws/          # EKS + ECR + OIDC + IAM + Kyverno (Helm)
-│   ├── providers.tf
-│   ├── variables.tf
-│   ├── main.tf
-│   └── outputs.tf
-├── helm/
-│   └── kyverno-values.yaml  # Cloud-agnostic Kyverno config
-├── scripts/
-│   ├── install-tools.sh     # Installs cosign, syft, crane
-│   ├── registry-login.sh    # Docker login (dispatches on $CLOUD)
-│   ├── kubeconfig.sh        # kubectl context update (dispatches on $CLOUD)
-│   ├── cosign-sign.sh       # Keyless signing wrapper
-│   ├── cosign-verify.sh     # Signature verification
-│   └── smoke-test.sh        # Deploy ephemeral pod and verify
-├── docker/hello-world/
-│   ├── Dockerfile           # Multi-stage distroless smoke-test image
-│   └── main.go
-├── .github/workflows/
-│   └── phase1-bootstrap.yml
-├── env.aws                  # AWS environment variables (source before make)
-├── Makefile
-└── README.md
+.github/workflows/
+  supply-chain.yml        ← ONE unified CD pipeline (matrix: aws, azure)
+  measure-latency.yml     ← Manual: admission latency measurement (aws, azure, or both)
+  attack-simulations.yml  ← Manual: 5 attack scenarios (aws, azure, or both)
+
+docker/
+  hello-world/            ← Distroless smoke-test image (the workload under test)
+
+kyverno/
+  verify-image-signature.yaml   ← Written ONCE — cloud-agnostic
+  verify-sbom-cyclonedx.yaml    ← Written ONCE — cloud-agnostic
+  verify-slsa-provenance.yaml   ← Written ONCE — cloud-agnostic
+  values/
+    aws.env               ← REGISTRY=812982728774.dkr.ecr.eu-west-1.amazonaws.com
+    azure.env             ← REGISTRY=supplychainthesis.azurecr.io
+
+terraform/
+  aws/                    ← EKS + ECR + OIDC + IAM + Kyverno IRSA
+  azure/                  ← AKS + ACR + Entra Workload Identity
+
+helm/
+  kyverno-values.yaml     ← Cloud-agnostic Kyverno Helm values
+
+scripts/
+  install-tools.sh        ← Installs cosign, syft, crane
+  registry-login.sh       ← Docker login (dispatches on $CLOUD)
+  kubeconfig.sh           ← kubectl context update (dispatches on $CLOUD)
+  cosign-sign.sh          ← Keyless signing wrapper
+  cosign-verify.sh        ← Signature verification
+  smoke-test.sh           ← Deploy ephemeral pod and verify
+
+docs/
+  generate_charts.py      ← Regenerate Phase 4 latency charts (thesis figures)
+  generate_size_charts.py ← Regenerate Phase 4b size vs latency charts
+
+bootstrap.sh              ← Run once after terraform apply (AWS) — installs Kyverno + policies
+bootstrap-azure.sh        ← Run once after terraform apply (Azure) — installs Kyverno + policies
+env.aws                   ← AWS environment variables (source before make)
+Makefile                  ← Local dev shortcuts
 ```
 
 ---
@@ -49,7 +71,8 @@ phase1/
 | Tool | Version | Install |
 |------|---------|---------|
 | Terraform | ≥ 1.6 | https://developer.hashicorp.com/terraform/install |
-| AWS CLI | ≥ 2.x | https://docs.aws.amazon.com/cli/latest/userguide/install-cliv2.html |
+| AWS CLI | ≥ 2.x | https://docs.aws.amazon.com/cli/latest/userguide/ |
+| Azure CLI | ≥ 2.x | https://docs.microsoft.com/cli/azure/install-azure-cli |
 | kubectl | ≥ 1.29 | https://kubernetes.io/docs/tasks/tools/ |
 | Helm | ≥ 3.14 | https://helm.sh/docs/intro/install/ |
 | cosign | 2.2.3 | `scripts/install-tools.sh` |
@@ -63,120 +86,187 @@ make deps                  # verifies all tools are present
 
 ---
 
-## Step 1 — Provision AWS infrastructure
+## Provisioning infrastructure
+
+### AWS
 
 ```bash
-# Authenticate
-aws configure
-aws sts get-caller-identity   # confirm
-
-# Deploy
 cd terraform/aws
 terraform init
 terraform apply \
-  -var="github_org=YOUR_ORG" \
-  -var="github_repo=YOUR_REPO"
+  -var="github_org=JMTeixeira23" \
+  -var="github_repo=DIMEI-k8s-2026" \
+  -auto-approve
+
+cd ../..
+bash bootstrap.sh          # installs Kyverno + applies policies + creates namespaces
 ```
 
-**Terraform creates:**
-- VPC with 2 public subnets across 2 AZs
-- EKS 1.29 cluster with 1 managed node group (`t3.medium`, min 1 / desired 2 / max 3)
-- IAM OIDC provider linked to the EKS cluster's issuer URL
-- ECR repository (`supply-chain/hello-world`) with **IMMUTABLE** tags and scan-on-push
-- IAM role that GitHub Actions can assume via OIDC (no static credentials)
-- Kyverno 3.1.4 installed via Helm
+**Terraform creates:** VPC (2 AZ), EKS 1.34, ECR, GitHub Actions OIDC role, Kyverno IRSA role.
 
----
-
-## Step 2 — Configure local environment
+### Azure
 
 ```bash
-# Edit env.aws — fill in AWS_ACCOUNT_ID, GITHUB_ORG, GITHUB_REPO
-nano env.aws
-source env.aws
+cd terraform/azure
+terraform init
+terraform apply \
+  -var="github_org=JMTeixeira23" \
+  -var="github_repo=DIMEI-k8s-2026" \
+  -var="location=northeurope" \
+  -auto-approve
 
-# Update kubeconfig
-make kubeconfig
-kubectl get nodes   # expect 2 Ready nodes
+cd ../..
+bash bootstrap-azure.sh    # installs Kyverno + applies policies + creates namespaces
 ```
+
+**Terraform creates:** Resource group, AKS 1.29, ACR, Entra app registrations + federated credentials, RBAC assignments.
 
 ---
 
-## Step 3 — Configure GitHub Actions secrets
+## GitHub Actions environments and secrets
 
-Add these in **Settings → Secrets and Variables → Actions** (create a `aws` environment):
+Create two environments in **Settings → Environments**: `aws` and `azure`.
 
-| Secret | Where to get it |
-|--------|----------------|
+### `aws` environment secrets
+
+| Secret | Value |
+|--------|-------|
 | `AWS_ROLE_ARN` | `terraform output github_actions_role_arn` |
-| `AWS_REGION` | e.g. `eu-west-1` |
-| `ECR_REPO_NAME` | e.g. `supply-chain/hello-world` |
-| `EKS_CLUSTER_NAME` | e.g. `supply-chain-eks` |
+| `AWS_REGION` | `eu-west-1` |
+| `ECR_REPO_NAME` | `supply-chain/hello-world` |
+| `EKS_CLUSTER_NAME` | `supply-chain-eks` |
+
+### `azure` environment secrets
+
+| Secret | Value |
+|--------|-------|
+| `AZURE_CLIENT_ID` | `terraform output github_actions_client_id` |
+| `AZURE_TENANT_ID` | `terraform output tenant_id` |
+| `AZURE_SUBSCRIPTION_ID` | `terraform output subscription_id` |
+| `ACR_LOGIN_SERVER` | `terraform output acr_login_server` |
+| `ACR_REPO_NAME` | `supply-chain/hello-world` |
+| `AKS_CLUSTER_NAME` | `supply-chain-aks` |
+| `AKS_RESOURCE_GROUP` | `supply-chain-rg` |
 
 ---
 
-## Step 4 — Run the smoke test
+## CD pipeline — supply-chain.yml
 
-### Via GitHub Actions
-Push to `main` or trigger manually:
+**Trigger:** any commit that changes `docker/**` → full pipeline runs on AWS and Azure in parallel.
+**Manual trigger:** `workflow_dispatch` with `cloud` input (aws / azure / both).
+
 ```
-Actions → Phase 1 — Bootstrap Smoke Test (AWS) → Run workflow
+docker/ change pushed
+    │
+    ├── supply-chain (aws)
+    │     Build → Sign → SBOM → Provenance → Verify → Smoke test
+    │     → Apply Kyverno policies (Enforce) → TC-01/02/03
+    │
+    └── supply-chain (azure)
+          Build → Sign → SBOM → Provenance → Verify → Smoke test
+          → Apply Kyverno policies (Enforce) → TC-01/02/03
 ```
 
-### Locally
+**What the pipeline proves per cloud:**
+
+| Step | Thesis evidence |
+|------|----------------|
+| Cosign keyless sign | Signature bound to GitHub OIDC identity via Fulcio + Rekor |
+| Syft CycloneDX SBOM | Full software bill of materials attested |
+| SLSA v1.0 provenance | Build origin cryptographically provable |
+| Kyverno Enforce | Admission blocked without all three attestations |
+| TC-01 admitted | Fully attested image passes all 3 policies |
+| TC-02/03 blocked | Non-registry images blocked at admission |
+
+The only cloud-specific steps in the entire pipeline are:
+1. OIDC auth (AWS role assumption vs Azure login)
+2. Registry login (ECR vs ACR)
+3. Kubeconfig (eks update-kubeconfig vs aks get-credentials)
+4. Registry URL injected from `kyverno/values/<cloud>.env`
+
+---
+
+## Kyverno policies
+
+Three ClusterPolicies written once and applied to every cluster:
+
+```
+kyverno/verify-image-signature.yaml   — blocks non-registry images + requires Cosign signature
+kyverno/verify-sbom-cyclonedx.yaml    — requires signed CycloneDX SBOM attestation
+kyverno/verify-slsa-provenance.yaml   — requires signed SLSA v1.0 provenance attestation
+```
+
+The registry URL (`REGISTRY_PLACEHOLDER`) is injected by `sed` at apply time:
+
 ```bash
-source env.aws
-make smoke-test TAG=v0.1.0
+# Conceptually what the pipeline does:
+REGISTRY=$(grep REGISTRY kyverno/values/aws.env | cut -d= -f2)
+sed "s|REGISTRY_PLACEHOLDER|${REGISTRY}|g" kyverno/verify-image-signature.yaml \
+  | kubectl apply --server-side -f -
 ```
 
-**What happens:**
-1. `docker build` — multi-stage distroless image
-2. `docker push` — to ECR (authenticated via `aws ecr get-login-password`)
-3. `cosign sign --yes` — keyless: GitHub OIDC → Fulcio certificate → Rekor transparency log
-4. `cosign verify` — checks certificate issuer and subject regexp
-5. `cosign tree` — shows the signature artefact in the registry
-6. `kubectl run` — ephemeral pod, confirms image pulls and exits 0
-
-Expected `cosign tree` output at Phase 1 (Phase 2 adds SBOM + provenance):
-```
-📦 Supply Chain Security Summary
-└── 📦 123456789012.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world:abc1234
-    └── 🔐 Signatures
-        └── sha256:def456...
-```
+To add a new cloud, create `kyverno/values/<cloud>.env` with the registry URL — no policy files change.
 
 ---
 
-## Step 5 — Verify Kyverno
+## Manual workflows
+
+### Admission latency measurement
+
+```
+Actions → Measure Admission Latency → Run workflow
+  cloud: both / aws / azure
+  iterations: 30
+```
+
+Measures Kyverno admission overhead across three conditions (baseline / audit / enforce), uploads a CSV artifact per cloud. Results from this thesis:
+
+| Cloud | Baseline | Enforce | Overhead |
+|-------|----------|---------|---------|
+| AWS EKS | 1195ms | 1228ms | +33ms (+2.8%) |
+| Azure AKS | (run to collect) | | |
+
+### Attack simulations
+
+```
+Actions → Attack Simulations → Run workflow
+  cloud: both / aws / azure
+```
+
+Five attacks run on each selected cloud. All expected to be blocked:
+
+| Attack | Threat | Policy that fires |
+|--------|--------|------------------|
+| A1 | Unsigned image | `verify-image-signature` |
+| A2 | Wrong OIDC signer (local key) | `verify-image-signature` |
+| A3 | Digest tampering (TOCTOU) | `verify-image-signature` |
+| A4 | Missing SBOM | `verify-sbom-cyclonedx` |
+| A5 | Missing SLSA provenance | `verify-slsa-provenance` |
+
+AWS result: **5/5 attacks blocked**.
+
+---
+
+## Destroy and rebuild
+
+The full stack is reproducible from code. To verify:
 
 ```bash
-make kyverno-status
+# Destroy
+cd terraform/aws   && terraform destroy -var="github_org=JMTeixeira23" -var="github_repo=DIMEI-k8s-2026" -auto-approve
+cd ../azure        && terraform destroy -var="github_org=JMTeixeira23" -var="github_repo=DIMEI-k8s-2026" -var="location=northeurope" -auto-approve
+
+# Rebuild
+cd terraform/aws   && terraform apply  -var="github_org=JMTeixeira23" -var="github_repo=DIMEI-k8s-2026" -auto-approve
+cd ../azure        && terraform apply  -var="github_org=JMTeixeira23" -var="github_repo=DIMEI-k8s-2026" -var="location=northeurope" -auto-approve
+
+# Bootstrap
+cd ~/DIMEI/DIMEI-k8s-2026
+bash bootstrap.sh
+bash bootstrap-azure.sh
+
+# Verify — trigger supply-chain pipeline on both clouds
 ```
-
-Expected:
-```
-NAME                            READY
-kyverno-admission-controller    2/2
-kyverno-background-controller   1/1
-kyverno-reports-controller      1/1
-kyverno-cleanup-controller      1/1
-```
-
-No ClusterPolicies yet — Phase 3 adds `verify-image-signature`, `verify-slsa-provenance`, and `verify-sbom-cyclonedx`.
-
----
-
-## Extending to Azure (future)
-
-The project is structured to minimise Azure addition effort:
-
-1. Create `terraform/azure/` with equivalent AKS + ACR + Entra Workload Identity modules
-2. Create `env.azure` with the same variable names (`CLOUD`, `IMAGE_REPO`, `REGISTRY`, `OIDC_ISSUER`, etc.)
-3. Add `azure)` case blocks to `scripts/registry-login.sh` and `scripts/kubeconfig.sh`
-4. Add a `smoke-test-azure` job to the CI workflow
-5. The `Makefile`, `cosign-sign.sh`, `cosign-verify.sh`, and `smoke-test.sh` require **zero changes**
-
-The only cloud-specific difference in Phase 3 Kyverno policies will be the registry URL prefix (`*.dkr.ecr.*.amazonaws.com` vs `*.azurecr.io`) and the OIDC subject pattern — the policy structure is identical.
 
 ---
 
@@ -184,19 +274,14 @@ The only cloud-specific difference in Phase 3 Kyverno policies will be the regis
 
 **`cosign: command not found`** — run `scripts/install-tools.sh` and add `~/.local/bin` to `$PATH`
 
-**EKS nodes stuck `NotReady`** — check VPC subnets have a route to the internet gateway; nodes need outbound internet to reach ECR
+**EKS nodes `NotReady`** — check VPC subnets have a route to the internet gateway
 
-**`cosign verify` fails with certificate error** — ensure `COSIGN_CERTIFICATE_OIDC_ISSUER` in `env.aws` exactly matches the issuer in the Fulcio certificate (`https://token.actions.githubusercontent.com`)
+**Kyverno `401 Unauthorized` on ECR** — IRSA annotation missing; re-run `bootstrap.sh`
 
-**Kyverno pods in `CrashLoopBackOff`** — usually a resource issue; check `kubectl describe pod -n kyverno` and confirm `t3.medium` nodes are Ready
+**Azure login `AADSTS700016`** — `AZURE_CLIENT_ID` or `AZURE_TENANT_ID` secret is wrong; check `terraform output`
 
----
+**Federated credential subject mismatch** — ensure the Entra federated credential subject is `repo:ORG/REPO:environment:azure` (not `ref:...`) because the workflow uses an environment
 
-## Phase 1 outputs checklist
+**TC-01 blocked unexpectedly** — ECR query picked up an `attack*` or `size-*` tag; these are excluded by the jq filter in the pipeline
 
-- [ ] `terraform/aws/terraform.tfstate` saved
-- [ ] `kubeconfig` updated; `kubectl get nodes` shows 2 Ready nodes
-- [ ] ECR repository visible in AWS console with at least 1 image
-- [ ] `cosign tree` output saved to `docs/phase1-cosign-tree.txt`
-- [ ] Both smoke-test pod logs captured
-- [ ] Kyverno pods all Running
+**Kyverno hook timeout on install** — run `helm uninstall kyverno -n kyverno`, delete the namespace, wait 15s, re-run `bootstrap.sh`
