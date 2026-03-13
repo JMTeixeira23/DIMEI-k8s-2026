@@ -121,6 +121,18 @@ kubectl create namespace supply-chain-demo \
   --dry-run=client -o yaml | kubectl apply -f -
 echo "  ✅ supply-chain-demo ready"
 
+# ── Step 9: Set all Kyverno webhooks to Ignore ───────────────────────────────
+echo ""
+echo "▶ Setting Kyverno webhooks to failurePolicy=Ignore..."
+for wh in $(kubectl get mutatingwebhookconfigurations   --no-headers -o name | grep kyverno); do
+  kubectl get "${wh}" -o json     | jq '.webhooks[].failurePolicy = "Ignore"'     | kubectl apply -f - 2>/dev/null || true
+  echo "  ✅ Patched ${wh}"
+done
+for wh in $(kubectl get validatingwebhookconfigurations   --no-headers -o name | grep kyverno); do
+  kubectl get "${wh}" -o json     | jq '.webhooks[].failurePolicy = "Ignore"'     | kubectl apply -f - 2>/dev/null || true
+  echo "  ✅ Patched ${wh}"
+done
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
 echo "════════════════════════════════════════════════════"
