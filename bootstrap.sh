@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# bootstrap.sh — run once after `terraform apply` to install Kyverno
-# and apply all Phase 3 ClusterPolicies.
+# bootstrap.sh — run once after `terraform apply` in terraform/aws/
+# Installs Kyverno on EKS and applies all ClusterPolicies with registry injection.
 #
 # Usage:
 #   cd terraform/aws
@@ -16,10 +16,13 @@ CLUSTER_NAME="supply-chain-eks"
 REGION="eu-west-1"
 KYVERNO_VERSION="3.1.4"
 KYVERNO_NS="kyverno"
+AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com"
 
 echo "════════════════════════════════════════════════════"
-echo "  Supply Chain Security — Bootstrap"
-echo "  Cluster: ${CLUSTER_NAME} (${REGION})"
+echo "  Supply Chain Security — AWS Bootstrap"
+echo "  Cluster : ${CLUSTER_NAME} (${REGION})"
+echo "  Registry: ${REGISTRY}"
 echo "════════════════════════════════════════════════════"
 echo ""
 
@@ -30,13 +33,10 @@ aws eks update-kubeconfig \
   --name "${CLUSTER_NAME}"
 echo "  ✅ kubeconfig updated"
 
-# ── Step 2: Wait for nodes to be Ready ───────────────────────────────────────
+# ── Step 2: Wait for nodes ────────────────────────────────────────────────────
 echo ""
 echo "▶ Waiting for nodes to be Ready..."
-kubectl wait node \
-  --all \
-  --for=condition=Ready \
-  --timeout=300s
+kubectl wait node --all --for=condition=Ready --timeout=300s
 echo "  ✅ Nodes ready"
 kubectl get nodes
 
@@ -46,7 +46,6 @@ echo "▶ Installing Kyverno ${KYVERNO_VERSION}..."
 helm repo add kyverno https://kyverno.github.io/kyverno/ 2>/dev/null || true
 helm repo update kyverno
 
-# Get the Kyverno IRSA role ARN from Terraform output
 KYVERNO_ROLE_ARN=$(cd terraform/aws && terraform output -raw kyverno_role_arn 2>/dev/null || \
   aws iam get-role --role-name kyverno-ecr-read \
     --query 'Role.Arn' --output text)
@@ -61,7 +60,6 @@ helm upgrade --install kyverno kyverno/kyverno \
   --set backgroundController.replicas=1 \
   --set reportsController.replicas=1 \
   --set cleanupController.replicas=1 \
-  --set cleanupController.cleanupjobs.admissionReports.image.tag="latest" \
   --set "admissionController.serviceAccount.annotations.eks\\.amazonaws\\.com/role-arn=${KYVERNO_ROLE_ARN}" \
   --set failurePolicy=Ignore \
   --set webhooksCleanup.enabled=false \
@@ -70,33 +68,39 @@ helm upgrade --install kyverno kyverno/kyverno \
 
 echo "  ✅ Kyverno installed"
 
-# ── Step 4: Suspend the broken cleanup CronJobs ───────────────────────────────
-# The cleanup CronJobs use bitnami/kubectl:1.28.5 which no longer exists.
-# Suspend them so they don't pollute the pod list.
+# ── Step 4: Suspend broken cleanup CronJobs ───────────────────────────────────
 echo ""
-echo "▶ Suspending cleanup CronJobs (broken bitnami/kubectl image)..."
+echo "▶ Suspending cleanup CronJobs..."
 for cj in kyverno-cleanup-admission-reports \
            kyverno-cleanup-cluster-admission-reports; do
   kubectl patch cronjob "${cj}" -n "${KYVERNO_NS}" \
     -p '{"spec":{"suspend":true}}' 2>/dev/null && \
     echo "  ✅ Suspended ${cj}" || \
-    echo "  ⚠️  ${cj} not found (may not exist yet)"
+    echo "  ⚠️  ${cj} not found"
 done
 
-# ── Step 5: Wait for Kyverno admission controller to be ready ─────────────────
+# ── Step 5: Wait for admission controller ─────────────────────────────────────
 echo ""
-echo "▶ Waiting for Kyverno admission controller pods..."
+echo "▶ Waiting for Kyverno admission controller..."
 kubectl rollout status deployment/kyverno-admission-controller \
   -n "${KYVERNO_NS}" --timeout=120s
 echo "  ✅ Admission controller ready"
 kubectl get pods -n "${KYVERNO_NS}"
 
-# ── Step 6: Apply Phase 3 ClusterPolicies ────────────────────────────────────
+# ── Step 6: Apply ClusterPolicies with registry injection ─────────────────────
+# Policies use REGISTRY_PLACEHOLDER — inject actual registry URL via sed.
 echo ""
-echo "▶ Applying Phase 3 ClusterPolicies (Enforce mode)..."
-kubectl apply -f kyverno/verify-image-signature.yaml
-kubectl apply -f kyverno/verify-sbom-cyclonedx.yaml
-kubectl apply -f kyverno/verify-slsa-provenance.yaml
+echo "▶ Applying ClusterPolicies (Enforce mode, registry: ${REGISTRY})..."
+mkdir -p /tmp/kyverno-rendered
+
+for f in kyverno/verify-image-signature.yaml \
+          kyverno/verify-sbom-cyclonedx.yaml \
+          kyverno/verify-slsa-provenance.yaml; do
+  sed "s|REGISTRY_PLACEHOLDER|${REGISTRY}|g" "${f}" \
+    > "/tmp/kyverno-rendered/$(basename ${f})"
+done
+
+kubectl apply --server-side --force-conflicts -f /tmp/kyverno-rendered/
 
 echo ""
 echo "▶ Waiting for policies to be Ready..."
@@ -106,18 +110,21 @@ kubectl get clusterpolicies -o wide
 # ── Step 7: Create namespaces ─────────────────────────────────────────────────
 echo ""
 echo "▶ Creating namespaces..."
-kubectl create namespace supply-chain-demo --dry-run=client -o yaml | kubectl apply -f -
-echo "  ✅ supply-chain-demo namespace ready"
+kubectl create namespace supply-chain-demo \
+  --dry-run=client -o yaml | kubectl apply -f -
+echo "  ✅ supply-chain-demo ready"
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
 echo "════════════════════════════════════════════════════"
 echo "  Bootstrap complete!"
 echo ""
-echo "  Next steps:"
-echo "  1. Trigger phase1-bootstrap.yml to build + sign an image"
-echo "  2. Trigger phase2-pipeline.yml to add SBOM + provenance"
-echo "  3. Trigger phase3-policies.yml (mode: Enforce) to verify"
-echo "  4. Trigger phase4-latency.yml to measure overhead"
-echo "  5. Trigger phase5-attacks.yml to verify attack blocking"
+echo "  GitHub secrets (environment: aws):"
+ROLE_ARN=$(cd terraform/aws && terraform output -raw github_actions_role_arn 2>/dev/null || echo "run terraform output")
+echo "    AWS_ROLE_ARN     = ${ROLE_ARN}"
+echo "    AWS_REGION       = ${REGION}"
+echo "    ECR_REPO_NAME    = supply-chain/hello-world"
+echo "    EKS_CLUSTER_NAME = ${CLUSTER_NAME}"
+echo ""
+echo "  Next: trigger supply-chain.yml (cloud: aws)"
 echo "════════════════════════════════════════════════════"
