@@ -296,6 +296,25 @@ jobs:
 
       # ── STEP 10 — Smoke test on cluster ───────────────────────────────────
 
+      - name: Wait for Kyverno to be healthy
+        run: |
+          echo "Checking Kyverno health before proceeding..."
+
+          # Wait for admission controller deployment
+          kubectl rollout status deployment/kyverno-admission-controller             -n kyverno --timeout=120s || true
+
+          # Wait for webhook to be responsive — try a dry-run admission
+          for i in $(seq 1 20); do
+            RESULT=$(kubectl create namespace kyverno-probe-$$               --dry-run=server 2>&1 || true)
+            if echo "${RESULT}" | grep -qv "context deadline exceeded"; then
+              echo "  ✅ Kyverno webhook is responding"
+              break
+            fi
+            echo "  webhook not ready yet (${i}/20) — waiting 10s..."
+            [ "${i}" = "20" ] && echo "⚠️  webhook still slow, proceeding anyway"
+            sleep 10
+          done
+
       - name: Smoke test on cluster
         run: |
           kubectl delete pod smoke-test --ignore-not-found
