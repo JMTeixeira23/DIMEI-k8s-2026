@@ -1,56 +1,61 @@
 #!/usr/bin/env bash
-# bootstrap.sh — run once after `terraform apply` in terraform/aws/
-# Installs Kyverno on EKS and applies all ClusterPolicies with registry injection.
+# bootstrap-azure.sh — run once after `terraform apply` in terraform/azure/
+# Installs Kyverno on AKS and applies all ClusterPolicies with registry injection.
 #
 # Usage:
-#   cd terraform/aws
-#   terraform apply -var="github_org=JMTeixeira23" -var="github_repo=DIMEI-k8s-2026" -auto-approve
+#   cd terraform/azure
+#   terraform apply -var="github_org=JMTeixeira23" -var="github_repo=DIMEI-k8s-2026" -var="location=northeurope" -auto-approve
 #   cd ../..
-#   bash bootstrap.sh
+#   bash bootstrap-azure.sh
 #
 # Safe to re-run — all steps are idempotent.
 
 set -euo pipefail
 
-CLUSTER_NAME="supply-chain-eks"
-REGION="eu-west-1"
+RESOURCE_GROUP="supply-chain-rg"
+CLUSTER_NAME="supply-chain-aks"
 KYVERNO_VERSION="3.1.4"
 KYVERNO_NS="kyverno"
-AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com"
 
 echo "════════════════════════════════════════════════════"
-echo "  Supply Chain Security — AWS Bootstrap"
-echo "  Cluster : ${CLUSTER_NAME} (${REGION})"
-echo "  Registry: ${REGISTRY}"
+echo "  Supply Chain Security — Azure Bootstrap"
+echo "  Cluster: ${CLUSTER_NAME} (${RESOURCE_GROUP})"
 echo "════════════════════════════════════════════════════"
 echo ""
 
-# ── Step 1: Configure kubectl ─────────────────────────────────────────────────
-echo "▶ Configuring kubectl..."
-aws eks update-kubeconfig \
-  --region "${REGION}" \
-  --name "${CLUSTER_NAME}"
+# ── Step 1: Get kubeconfig ────────────────────────────────────────────────────
+echo "▶ Configuring kubectl for AKS..."
+az aks get-credentials \
+  --resource-group "${RESOURCE_GROUP}" \
+  --name "${CLUSTER_NAME}" \
+  --overwrite-existing
 echo "  ✅ kubeconfig updated"
 
 # ── Step 2: Wait for nodes ────────────────────────────────────────────────────
 echo ""
 echo "▶ Waiting for nodes to be Ready..."
 kubectl wait node --all --for=condition=Ready --timeout=300s
-echo "  ✅ Nodes ready"
 kubectl get nodes
 
-# ── Step 3: Install Kyverno via Helm ─────────────────────────────────────────
+# ── Step 3: Get Terraform outputs ─────────────────────────────────────────────
+echo ""
+echo "▶ Reading Terraform outputs..."
+KYVERNO_CLIENT_ID=$(cd terraform/azure && terraform output -raw kyverno_client_id)
+TENANT_ID=$(cd terraform/azure && terraform output -raw tenant_id)
+SUBSCRIPTION_ID=$(cd terraform/azure && terraform output -raw subscription_id)
+GITHUB_CLIENT_ID=$(cd terraform/azure && terraform output -raw github_actions_client_id)
+ACR_LOGIN_SERVER=$(cd terraform/azure && terraform output -raw acr_login_server)
+REGISTRY="${ACR_LOGIN_SERVER}"
+
+echo "  Kyverno client ID: ${KYVERNO_CLIENT_ID}"
+echo "  Tenant ID:         ${TENANT_ID}"
+echo "  Registry:          ${REGISTRY}"
+
+# ── Step 4: Install Kyverno via Helm ─────────────────────────────────────────
 echo ""
 echo "▶ Installing Kyverno ${KYVERNO_VERSION}..."
 helm repo add kyverno https://kyverno.github.io/kyverno/ 2>/dev/null || true
 helm repo update kyverno
-
-KYVERNO_ROLE_ARN=$(cd terraform/aws && terraform output -raw kyverno_role_arn 2>/dev/null || \
-  aws iam get-role --role-name kyverno-ecr-read \
-    --query 'Role.Arn' --output text)
-
-echo "  Kyverno IRSA role: ${KYVERNO_ROLE_ARN}"
 
 helm upgrade --install kyverno kyverno/kyverno \
   --namespace "${KYVERNO_NS}" \
@@ -60,15 +65,17 @@ helm upgrade --install kyverno kyverno/kyverno \
   --set backgroundController.replicas=1 \
   --set reportsController.replicas=1 \
   --set cleanupController.replicas=1 \
-  --set "admissionController.serviceAccount.annotations.eks\\.amazonaws\\.com/role-arn=${KYVERNO_ROLE_ARN}" \
   --set failurePolicy=Ignore \
   --set webhooksCleanup.enabled=false \
+  --set "admissionController.serviceAccount.annotations.azure\\.workload\\.identity/client-id=${KYVERNO_CLIENT_ID}" \
+  --set-string "admissionController.podLabels.azure\\.workload\\.identity/use=true" \
   --timeout 5m \
+  --no-hooks \
   --wait
 
 echo "  ✅ Kyverno installed"
 
-# ── Step 4: Suspend broken cleanup CronJobs ───────────────────────────────────
+# ── Step 5: Suspend broken cleanup CronJobs ───────────────────────────────────
 echo ""
 echo "▶ Suspending cleanup CronJobs..."
 for cj in kyverno-cleanup-admission-reports \
@@ -79,7 +86,7 @@ for cj in kyverno-cleanup-admission-reports \
     echo "  ⚠️  ${cj} not found"
 done
 
-# ── Step 5: Wait for admission controller ─────────────────────────────────────
+# ── Step 6: Wait for admission controller ─────────────────────────────────────
 echo ""
 echo "▶ Waiting for Kyverno admission controller..."
 kubectl rollout status deployment/kyverno-admission-controller \
@@ -87,7 +94,7 @@ kubectl rollout status deployment/kyverno-admission-controller \
 echo "  ✅ Admission controller ready"
 kubectl get pods -n "${KYVERNO_NS}"
 
-# ── Step 6: Apply ClusterPolicies with registry injection ─────────────────────
+# ── Step 7: Apply ClusterPolicies with registry injection ─────────────────────
 # Policies use REGISTRY_PLACEHOLDER — inject actual registry URL via sed.
 echo ""
 echo "▶ Applying ClusterPolicies (Enforce mode, registry: ${REGISTRY})..."
@@ -107,7 +114,7 @@ echo "▶ Waiting for policies to be Ready..."
 sleep 10
 kubectl get clusterpolicies -o wide
 
-# ── Step 7: Create namespaces ─────────────────────────────────────────────────
+# ── Step 8: Create namespaces ─────────────────────────────────────────────────
 echo ""
 echo "▶ Creating namespaces..."
 kubectl create namespace supply-chain-demo \
@@ -117,14 +124,16 @@ echo "  ✅ supply-chain-demo ready"
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
 echo "════════════════════════════════════════════════════"
-echo "  Bootstrap complete!"
+echo "  Azure Bootstrap complete!"
 echo ""
-echo "  GitHub secrets (environment: aws):"
-ROLE_ARN=$(cd terraform/aws && terraform output -raw github_actions_role_arn 2>/dev/null || echo "run terraform output")
-echo "    AWS_ROLE_ARN     = ${ROLE_ARN}"
-echo "    AWS_REGION       = ${REGION}"
-echo "    ECR_REPO_NAME    = supply-chain/hello-world"
-echo "    EKS_CLUSTER_NAME = ${CLUSTER_NAME}"
+echo "  Update GitHub secrets (environment: azure):"
+echo "    AZURE_CLIENT_ID       = ${GITHUB_CLIENT_ID}"
+echo "    AZURE_TENANT_ID       = ${TENANT_ID}"
+echo "    AZURE_SUBSCRIPTION_ID = ${SUBSCRIPTION_ID}"
+echo "    ACR_LOGIN_SERVER      = ${ACR_LOGIN_SERVER}"
+echo "    ACR_REPO_NAME         = supply-chain/hello-world"
+echo "    AKS_CLUSTER_NAME      = ${CLUSTER_NAME}"
+echo "    AKS_RESOURCE_GROUP    = ${RESOURCE_GROUP}"
 echo ""
-echo "  Next: trigger supply-chain.yml (cloud: aws)"
+echo "  Next: trigger supply-chain.yml (cloud: azure)"
 echo "════════════════════════════════════════════════════"
