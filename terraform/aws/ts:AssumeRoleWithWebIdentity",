@@ -1,0 +1,18 @@
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Principal": {
+                "Federated": "arn:aws:iam::812982728774:oidc-provider/oidc.eks.eu-west-1.amazonaws.com/id/6FDF2AE9D5BCBAE20194E33B6BDC3518"
+            },
+            "Action": "sts:AssumeRoleWithWebIdentity",
+            "Condition": {
+                "StringEquals": {
+                    "oidc.eks.eu-west-1.amazonaws.com/id/6FDF2AE9D5BCBAE20194E33B6BDC3518:sub": "system:serviceaccount:kyverno:kyverno-admission-controller",
+                    "oidc.eks.eu-west-1.amazonaws.com/id/6FDF2AE9D5BCBAE20194E33B6BDC3518:aud": "sts.amazonaws.com"
+                }
+            }
+        }
+    ]
+}
