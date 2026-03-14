@@ -96,6 +96,13 @@ helm upgrade --install kyverno kyverno/kyverno \
 
 echo "  ✅ Kyverno installed"
 
+# Explicitly annotate the service account — the Helm --set flag is unreliable.
+# IRSA token injection requires this annotation to be present before pod start.
+echo ""
+echo "▶ Annotating Kyverno service account for IRSA..."
+kubectl annotate serviceaccount kyverno-admission-controller   -n "${KYVERNO_NS}"   "eks.amazonaws.com/role-arn=${KYVERNO_ROLE_ARN}"   --overwrite
+echo "  ✅ IRSA annotation set"
+
 # ── Patch admission controller to force all webhooks to Ignore ───────────────
 echo ""
 echo "▶ Patching admission controller with --forceFailurePolicyIgnore..."
