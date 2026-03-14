@@ -18,7 +18,10 @@ on:
         required: true
         default: 'both'
         type: choice
-        options: [both, aws, azure]
+        options:
+          - both
+          - aws
+          - azure
       iterations:
         description: 'Pods per condition (default: 30)'
         required: false
