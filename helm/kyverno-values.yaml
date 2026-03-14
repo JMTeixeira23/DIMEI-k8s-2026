@@ -1,47 +1,48 @@
 # helm/kyverno-values.yaml
-# Cloud-agnostic Kyverno configuration.
-# Applied to both EKS (now) and AKS (future) using the same file.
-# The only cloud-specific details are in the ClusterPolicy YAMLs (Phase 3),
-# not here — specifically the registry URL prefix and OIDC issuer subject.
-
-replicaCount: 3
-
-resources:
-  limits:
-    cpu: 500m
-    memory: 512Mi
-  requests:
-    cpu: 100m
-    memory: 256Mi
+# Kyverno Helm values — applied by bootstrap.sh and bootstrap-azure.sh.
+#
+# Used by both AWS and AKS. Cloud-specific configuration (IRSA annotation,
+# workload identity label) is passed as --set flags in the bootstrap scripts
+# because those values come from Terraform outputs at runtime.
+#
+# To update Kyverno config, edit this file and re-run the relevant bootstrap.
 
 admissionController:
   replicas: 3
+  # serviceAccount annotations and podLabels for IRSA/Workload Identity are
+  # set via --set in bootstrap.sh / bootstrap-azure.sh at install time.
 
-# Background controller scans existing resources periodically
 backgroundController:
-  enabled: true
+  replicas: 1
 
-# Reports controller writes PolicyReport objects — used in Phase 3 audit mode
 reportsController:
-  enabled: true
+  replicas: 1
 
 cleanupController:
-  enabled: true
+  replicas: 1
+  # The cleanup jobs use an image that may not exist in older Kyverno releases.
+  # bootstrap.sh suspends the CronJobs after install to avoid ImagePullBackOff.
 
-# Fail-open: if Kyverno itself crashes, pods are still admitted.
-# Thesis note: discuss fail-open vs fail-closed trade-offs in Chapter 5.
-# Switch to Fail for hardened production deployments.
+# Fail-open: if Kyverno is temporarily unreachable, pods are still admitted.
+# This prevents a Kyverno outage from taking down the whole cluster.
+# In a production hardened environment, change to Fail and ensure Kyverno
+# has sufficient replicas and PodDisruptionBudgets.
 failurePolicy: Ignore
 
-# Log level: use debug during Phase 3 policy development, then revert to info
-logLevel: info
+# forceFailurePolicyIgnore does not work via Helm values in 3.1.4.
+# bootstrap.sh patches the admission controller deployment directly with
+# --forceFailurePolicyIgnore=true as a container arg after install.
 
-# Expose Prometheus metrics — consumed in Phase 4/5 latency measurements.
-# Enable serviceMonitor if Prometheus Operator is installed.
+webhooksCleanup:
+  enabled: false
+
+# Prometheus metrics on :8000/metrics — useful during latency measurements.
 metricsService:
   create: true
   port: 8000
 
+# Webhook timeouts — 15s gives Kyverno time to query Rekor for attestations
+# without timing out on larger images or slow network conditions.
 config:
   webhooks:
     - name: mutating-webhook-cfg

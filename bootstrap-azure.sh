@@ -58,6 +58,7 @@ helm repo add kyverno https://kyverno.github.io/kyverno/ 2>/dev/null || true
 helm repo update kyverno
 
 helm upgrade --install kyverno kyverno/kyverno \
+  --values helm/kyverno-values.yaml \
   --namespace "${KYVERNO_NS}" \
   --create-namespace \
   --version "${KYVERNO_VERSION}" \

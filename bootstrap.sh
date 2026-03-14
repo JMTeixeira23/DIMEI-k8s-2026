@@ -78,6 +78,7 @@ helm repo update kyverno
 echo "  Kyverno IRSA role: ${KYVERNO_ROLE_ARN}"
 
 helm upgrade --install kyverno kyverno/kyverno \
+  --values helm/kyverno-values.yaml \
   --namespace "${KYVERNO_NS}" \
   --create-namespace \
   --version "${KYVERNO_VERSION}" \
