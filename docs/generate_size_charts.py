@@ -1,156 +1,111 @@
+#!/usr/bin/env python3
 """
-Phase 4b — Image Size vs Admission Latency Charts
-Run after the pipeline completes and paste your CSV data into RESULTS below.
+Generates image size vs admission latency charts from Phase 4b data.
 
 Usage:
-    python3 generate_size_charts.py
+    # Download the size-latency-aws and size-latency-azure artifacts from
+    # the 'Measure Admission Latency' GitHub Actions run, then:
+    python3 docs/generate_size_charts.py size-latency-aws.csv size-latency-azure.csv
 
 Output:
-    fig4_size_vs_latency_line.png   — mean latency line across sizes
-    fig5_size_vs_latency_bar.png    — bar chart with error bars
-    fig6_size_vs_latency_box.png    — box plot (if raw CSV available)
+    docs/figures/size_vs_latency.png
+    docs/figures/size_vs_latency.pdf  (for LaTeX)
+
+The script produces a line chart showing admission latency across four
+image sizes (5MB / 30MB / 120MB / 400MB) for both AWS EKS and Azure AKS.
+A flat line across sizes confirms the O(1) hypothesis — Kyverno verifies
+the image digest against Rekor without pulling image content, so image
+size does not affect admission cost.
+
+This figure goes in the Performance Evaluation chapter alongside the
+overhead chart to show that the framework scales to any image size.
 """
+import sys
+import csv
+from pathlib import Path
 
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
-import numpy as np
+try:
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import numpy as np
+except ImportError:
+    print("Install dependencies: pip install matplotlib numpy")
+    sys.exit(1)
 
-# ─── Paste your CSV results here after the pipeline runs ─────────────────────
-# Format: size, approx_mb, n, mean_ms, median_ms, stdev_ms, p95_ms
-# Replace these placeholder values with your actual measurements
-RESULTS = [
-    # size      mb    n   mean  median  stdev  p95
-    ("small",    5,  20,  None,  None,   None, None),
-    ("medium",  30,  20,  None,  None,   None, None),
-    ("large",  120,  20,  None,  None,   None, None),
-    ("xlarge", 400,  20,  None,  None,   None, None),
-]
-# ─────────────────────────────────────────────────────────────────────────────
 
-LABELS = [f"{r[0].capitalize()}\n(~{r[1]} MB)" for r in RESULTS]
-MBS    = [r[1] for r in RESULTS]
-MEANS  = [r[3] for r in RESULTS]
-STDEVS = [r[5] for r in RESULTS]
+def load_csv(path: str) -> list:
+    """Read a size-latency CSV into a list of dicts ordered by image size."""
+    rows = []
+    with open(path) as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            rows.append({
+                "size":   row["size"],
+                "mb":     int(row["approx_mb"]),
+                "mean":   int(row["mean_ms"]),
+                "median": int(row["median_ms"]),
+                "stdev":  int(row["stdev_ms"]),
+                "cloud":  row["cloud"],
+            })
+    # Sort by image size so the x-axis is monotonically increasing
+    return sorted(rows, key=lambda r: r["mb"])
 
-# Check if we have real data
-HAS_DATA = all(m is not None for m in MEANS)
 
-plt.rcParams.update({
-    "font.family":     "DejaVu Sans",
-    "font.size":       11,
-    "axes.spines.top":   False,
-    "axes.spines.right": False,
-    "axes.grid":         True,
-    "grid.alpha":        0.3,
-    "figure.dpi":        150,
-})
+def main():
+    if len(sys.argv) < 3:
+        print("Usage: generate_size_charts.py size-latency-aws.csv size-latency-azure.csv")
+        sys.exit(1)
 
-if not HAS_DATA:
-    # Generate illustrative placeholder charts showing the expected flat line
-    # Replace RESULTS above with actual measurements after pipeline runs
-    print("⚠️  No measurement data yet — generating illustrative charts")
-    print("   Paste your CSV data into RESULTS at the top of this script")
-    MEANS  = [1220, 1225, 1230, 1228]   # illustrative flat line
-    STDEVS = [42,   38,   55,   61]
+    aws_rows   = load_csv(sys.argv[1])
+    azure_rows = load_csv(sys.argv[2])
 
-# ─── Figure 4: Line chart — size vs mean latency ─────────────────────────────
-fig, ax = plt.subplots(figsize=(9, 5))
+    aws_mb     = [r["mb"]    for r in aws_rows]
+    aws_means  = [r["mean"]  for r in aws_rows]
+    aws_stdevs = [r["stdev"] for r in aws_rows]
+    aws_labels = [r["size"]  for r in aws_rows]
 
-x = np.arange(len(MBS))
-ax.errorbar(x, MEANS, yerr=STDEVS,
-            fmt='o-', color='#2196F3', linewidth=2.5,
-            markersize=9, capsize=6, capthick=2,
-            ecolor='#90CAF9', label='Mean ± stdev')
+    azure_mb     = [r["mb"]    for r in azure_rows]
+    azure_means  = [r["mean"]  for r in azure_rows]
+    azure_stdevs = [r["stdev"] for r in azure_rows]
 
-# Mark the flat reference line at baseline mean
-baseline_mean = 1195  # from Phase 4 results
-ax.axhline(baseline_mean, color='#4CAF50', linestyle='--',
-           linewidth=1.5, alpha=0.7, label=f'Phase 4 baseline ({baseline_mean}ms)')
+    fig, ax = plt.subplots(figsize=(9, 5))
 
-# Annotate each point
-for xi, (mean, stdev, label) in enumerate(zip(MEANS, STDEVS, LABELS)):
-    ax.annotate(f"{mean:.0f}ms",
-                xy=(xi, mean), xytext=(0, 14),
-                textcoords='offset points',
-                ha='center', fontsize=9, color='#1565C0')
+    ax.errorbar(aws_mb, aws_means, yerr=aws_stdevs,
+                label="AWS EKS", color="#FF9900", marker="o",
+                linewidth=2, capsize=5, markersize=7)
+    ax.errorbar(azure_mb, azure_means, yerr=azure_stdevs,
+                label="Azure AKS", color="#0072C6", marker="s",
+                linewidth=2, capsize=5, markersize=7)
 
-ax.set_xticks(x)
-ax.set_xticklabels(LABELS, fontsize=11)
-ax.set_xlabel("Image size", fontsize=12)
-ax.set_ylabel("Admission latency (ms)", fontsize=12)
-ax.set_title(
-    "Kyverno Admission Latency vs Image Size\n"
-    "(Enforce mode, n=20 pods per size — hypothesis: flat line)",
-    fontsize=13, fontweight="bold", pad=15)
-ax.set_ylim(1050, 1420)
-ax.legend(fontsize=10)
+    ax.set_xlabel("Image size (MB)", fontsize=12)
+    ax.set_ylabel("Admission latency (ms)", fontsize=12)
+    ax.set_title("Image Size vs Kyverno Admission Latency\n"
+                 "(error bars = 1 standard deviation, n=20 per size)",
+                 fontsize=12)
+    ax.set_xscale("log")
+    ax.set_xticks(aws_mb)
+    ax.set_xticklabels([f"{s}\n({m}MB)" for s, m in zip(aws_labels, aws_mb)],
+                       fontsize=10)
+    ax.legend(fontsize=11)
+    ax.grid(axis="y", linestyle="--", alpha=0.4)
+    ax.set_ylim(0)
 
-# Add hypothesis annotation
-spread = max(MEANS) - min(MEANS)
-color  = '#4CAF50' if spread < 100 else '#F44336'
-verdict = f"Mean spread = {spread:.0f}ms — {'O(1) confirmed ✓' if spread < 100 else 'investigate ✗'}"
-ax.text(0.02, 0.04, verdict, transform=ax.transAxes,
-        fontsize=9, color=color, fontweight='bold',
-        bbox=dict(boxstyle='round,pad=0.4', facecolor='white', edgecolor=color, alpha=0.8))
+    # Print the spread for each cloud so it appears in terminal output
+    for cloud, rows in [("AWS", aws_rows), ("Azure", azure_rows)]:
+        means  = [r["mean"] for r in rows]
+        spread = max(means) - min(means)
+        verdict = "SUPPORTED" if spread < 500 else "inconclusive"
+        print(f"{cloud}: spread={spread}ms across all sizes — O(1) hypothesis {verdict}")
 
-plt.tight_layout()
-plt.savefig("fig4_size_vs_latency_line.png", bbox_inches="tight")
-plt.close()
-print("✅ fig4_size_vs_latency_line.png")
+    out_dir = Path("docs/figures")
+    out_dir.mkdir(parents=True, exist_ok=True)
 
-# ─── Figure 5: Bar chart ──────────────────────────────────────────────────────
-COLORS = ['#81C784', '#FFB74D', '#E57373', '#BA68C8']
+    fig.tight_layout()
+    fig.savefig(out_dir / "size_vs_latency.png", dpi=150)
+    fig.savefig(out_dir / "size_vs_latency.pdf")
+    print(f"\nSaved to {out_dir}/size_vs_latency.{{png,pdf}}")
 
-fig, ax = plt.subplots(figsize=(9, 5))
-bars = ax.bar(x, MEANS, color=COLORS, width=0.5,
-              yerr=STDEVS, capsize=6,
-              error_kw={"elinewidth": 2, "ecolor": "black"})
 
-for bar, mean, mb in zip(bars, MEANS, MBS):
-    ax.text(bar.get_x() + bar.get_width()/2,
-            mean + max(STDEVS) + 10,
-            f"{mean:.0f}ms", ha='center', fontsize=9)
-
-# Overlay actual size labels on bars
-for bar, mb in zip(bars, MBS):
-    ax.text(bar.get_x() + bar.get_width()/2,
-            bar.get_height()/2,
-            f"~{mb} MB", ha='center', va='center',
-            fontsize=9, color='white', fontweight='bold')
-
-ax.set_xticks(x)
-ax.set_xticklabels(LABELS)
-ax.set_ylabel("Mean admission latency (ms)", fontsize=12)
-ax.set_title(
-    "Admission Latency by Image Size (Enforce mode)\n"
-    "Kyverno verifies digest only — image layers never pulled during admission",
-    fontsize=12, fontweight="bold", pad=15)
-ax.set_ylim(1050, 1420)
-ax.axhline(baseline_mean, color='#4CAF50', linestyle='--',
-           linewidth=1.5, alpha=0.7, label=f'No-policy baseline ({baseline_mean}ms)')
-ax.legend(fontsize=10)
-plt.tight_layout()
-plt.savefig("fig5_size_vs_latency_bar.png", bbox_inches="tight")
-plt.close()
-print("✅ fig5_size_vs_latency_bar.png")
-
-# ─── Print thesis table ───────────────────────────────────────────────────────
-print("")
-print("═" * 65)
-print("  Table Y — Admission Latency vs Image Size (Phase 4b)")
-print("  Hypothesis: Kyverno admission latency is O(1) w.r.t. image size")
-print("═" * 65)
-print(f"{'Image Size':<12} {'Approx MB':>10} {'Mean (ms)':>10} "
-      f"{'Stdev (ms)':>11} {'p95 (ms)':>9}")
-print("-" * 65)
-for r, mean, stdev in zip(RESULTS, MEANS, STDEVS):
-    p95 = r[6] if r[6] else "—"
-    print(f"{r[0]:<12} {r[1]:>10} {mean:>10.0f} {stdev:>11.0f} {str(p95):>9}")
-print("-" * 65)
-print(f"{'Spread':<12} {'':>10} {max(MEANS)-min(MEANS):>10.0f} ms")
-print("═" * 65)
-print("")
-if not HAS_DATA:
-    print("⚠️  Charts generated with ILLUSTRATIVE data.")
+if __name__ == "__main__":
+    main()

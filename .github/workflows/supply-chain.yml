@@ -1,19 +1,12 @@
 name: Supply Chain Security Pipeline
 
-# ─────────────────────────────────────────────────────────────────────────────
-# UNIFIED PIPELINE — runs identically on AWS EKS and Azure AKS in parallel.
+# Unified CD pipeline — runs on AWS EKS and Azure AKS in parallel via matrix.
 #
-# The only cloud-specific steps are:
-#   1. Auth   (OIDC federation — AWS vs Entra)
-#   2. Registry login (ECR vs ACR)
-#   3. Kubeconfig (eks update-kubeconfig vs aks get-credentials)
-#   4. Registry URL injection into Kyverno policies
+# The only cloud-specific steps are auth, registry login, and kubeconfig.
+# Everything from signing through policy enforcement is identical on both clouds.
 #
-# Everything else — Cosign signing, Syft SBOM, SLSA provenance,
-# Kyverno policy application, admission tests — is identical.
-#
-# Trigger: any change to docker/ → full supply chain runs on both clouds.
-# ─────────────────────────────────────────────────────────────────────────────
+# Triggered automatically when docker/ changes. Can also be run manually
+# to target a specific cloud or to verify the pipeline after infrastructure changes.
 
 on:
   push:
@@ -27,10 +20,13 @@ on:
         required: true
         default: 'both'
         type: choice
-        options: [both, aws, azure]
+        options:
+          - both
+          - aws
+          - azure
 
 permissions:
-  id-token: write   # OIDC tokens for AWS, Azure and Cosign keyless
+  id-token: write   # needed for OIDC auth to AWS/Azure and for Cosign keyless signing
   contents: read
   actions: read
 
@@ -45,7 +41,7 @@ jobs:
     environment: ${{ matrix.cloud }}
 
     strategy:
-      fail-fast: false   # one cloud failing should not cancel the other
+      fail-fast: false   # keep the other cloud running if one fails
       matrix:
         include:
           - cloud: aws
@@ -55,19 +51,21 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Skip this leg if the user selected a specific cloud on manual trigger.
+      # On push, both legs always run.
       - name: Check cloud selection
         run: |
           SELECTED="${{ inputs.cloud }}"
           THIS="${{ matrix.cloud }}"
-          # On push, always run both. On manual trigger, skip if not selected.
           if [ -n "${SELECTED}" ] && [ "${SELECTED}" != "both" ] && [ "${SELECTED}" != "${THIS}" ]; then
-            echo "Skipping ${THIS} — selected: ${SELECTED}"
+            echo "Skipping ${THIS} (selected: ${SELECTED})"
             exit 0
           fi
 
-      # ── STEP 1 — Auth (cloud-specific) ────────────────────────────────────
+      # --- Auth (cloud-specific) -------------------------------------------
+      # Both use OIDC federation — no long-lived credentials stored anywhere.
 
-      - name: Auth — AWS (OIDC federation, no static credentials)
+      - name: Auth — AWS
         if: matrix.cloud == 'aws'
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -75,7 +73,7 @@ jobs:
           aws-region: ${{ secrets.AWS_REGION }}
           role-session-name: supply-chain-${{ github.run_id }}
 
-      - name: Auth — Azure (OIDC federation, no static credentials)
+      - name: Auth — Azure
         if: matrix.cloud == 'azure'
         uses: azure/login@v2
         with:
@@ -83,21 +81,20 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      # ── STEP 2 — Registry login (cloud-specific) ──────────────────────────
+      # --- Registry login (cloud-specific) ---------------------------------
 
-      - name: Registry login — ECR (AWS)
+      - name: Registry login — ECR
         if: matrix.cloud == 'aws'
         id: ecr-login
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Registry login — ACR (Azure)
+      - name: Registry login — ACR
         if: matrix.cloud == 'azure'
         run: az acr login --name "${{ secrets.ACR_LOGIN_SERVER }}"
 
-      # ── STEP 3 — Resolve unified env vars ─────────────────────────────────
-      # From this point on, $REGISTRY and $REPO are used everywhere.
-
-      - name: Set unified registry vars
+      # Normalise registry/repo into cloud-agnostic env vars used by all
+      # subsequent steps. After this point no step needs to know which cloud it is.
+      - name: Set registry env vars
         run: |
           if [ "${{ matrix.cloud }}" = "aws" ]; then
             echo "REGISTRY=${{ steps.ecr-login.outputs.registry }}" >> $GITHUB_ENV
@@ -107,7 +104,7 @@ jobs:
             echo "REPO=${{ secrets.ACR_REPO_NAME }}"               >> $GITHUB_ENV
           fi
 
-      # ── STEP 4 — Build & Push ─────────────────────────────────────────────
+      # --- Build & Push ----------------------------------------------------
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -124,51 +121,55 @@ jobs:
             --metadata-file /tmp/build-metadata.json \
             docker/hello-world
 
+          # Extract the content-addressable digest from the build output.
+          # All downstream steps (sign, attest, verify, policy tests) use this
+          # digest reference so Kyverno can verify without re-pulling layers.
           DIGEST=$(jq -r '."containerimage.digest"' /tmp/build-metadata.json)
           IMAGE_REF="${REGISTRY}/${REPO}@${DIGEST}"
 
-          # Persist for all downstream steps in this job
           echo "FULL_IMAGE=${FULL_IMAGE}" >> $GITHUB_ENV
           echo "DIGEST=${DIGEST}"         >> $GITHUB_ENV
           echo "IMAGE_REF=${IMAGE_REF}"   >> $GITHUB_ENV
+          echo "Built: ${IMAGE_REF}"
 
-          echo "✅ Built: ${IMAGE_REF}"
-
-      # ── STEP 5 — Sign (Cosign keyless OIDC) ───────────────────────────────
-      # Identical on both clouds — Cosign uses the GitHub Actions OIDC token,
-      # not any cloud-specific credential.
+      # --- Sign (Cosign keyless) -------------------------------------------
+      # Cosign exchanges the GitHub Actions OIDC token for a short-lived Fulcio
+      # certificate. The cert + signature are recorded in Rekor (public log).
+      # No private keys involved — the identity is the workflow path itself.
 
       - name: Install Cosign
         uses: sigstore/cosign-installer@v3
         with:
           cosign-release: v2.2.3
 
-      - name: Sign image by digest (keyless)
+      - name: Sign image
         run: |
           cosign sign --yes "${IMAGE_REF}"
-          echo "✅ Signed: ${IMAGE_REF}"
+          echo "Signed: ${IMAGE_REF}"
 
-      # ── STEP 6 — SBOM (CycloneDX via Syft) ───────────────────────────────
+      # --- SBOM (CycloneDX) ------------------------------------------------
+      # Syft scans the image layers and produces a full package inventory.
+      # Attached as a signed attestation so Kyverno can verify it at admission.
 
       - name: Install Syft
         uses: anchore/sbom-action/download-syft@v0
         with:
           syft-version: v0.105.1
 
-      - name: Generate and attest CycloneDX SBOM
+      - name: Generate and attest SBOM
         run: |
           syft "${IMAGE_REF}" --output cyclonedx-json=sbom.cdx.json
-
-          echo "✅ SBOM generated"
-          echo "   Components: $(jq '.components | length' sbom.cdx.json)"
+          echo "SBOM components: $(jq '.components | length' sbom.cdx.json)"
 
           cosign attest --yes \
             --predicate sbom.cdx.json \
             --type cyclonedx \
             "${IMAGE_REF}"
-          echo "✅ SBOM attested"
+          echo "SBOM attested"
 
-      # ── STEP 7 — SLSA Provenance ──────────────────────────────────────────
+      # --- SLSA Provenance -------------------------------------------------
+      # Records where and how the image was built — repo, commit, workflow,
+      # run ID. Meets SLSA v1.0 Build L1. Attached as a signed attestation.
 
       - name: Generate and attest SLSA provenance
         env:
@@ -185,72 +186,19 @@ jobs:
 
           FULL_IMAGE="${FULL_IMAGE}" \
           BUILD_TIMESTAMP="${BUILD_TIMESTAMP}" \
-          python3 - << 'PYEOF'
-          import json, os
-
-          repo        = os.environ["GH_REPOSITORY"]
-          ref_name    = os.environ["GH_REF_NAME"]
-          sha         = os.environ["GH_SHA"]
-          event       = os.environ["GH_EVENT"]
-          workflow    = os.environ["GH_WORKFLOW"]
-          run_id      = os.environ["GH_RUN_ID"]
-          run_attempt = os.environ["GH_RUN_ATTEMPT"]
-          full_image  = os.environ["FULL_IMAGE"]
-          timestamp   = os.environ["BUILD_TIMESTAMP"]
-          cloud       = os.environ["CLOUD"]
-
-          provenance = {
-            "buildDefinition": {
-              "buildType": "https://slsa.dev/container-based-build/v0.1",
-              "externalParameters": {
-                "source": {
-                  "uri": f"git+https://github.com/{repo}@refs/heads/{ref_name}",
-                  "digest": {"gitCommit": sha}
-                },
-                "image": full_image,
-                "cloud": cloud
-              },
-              "internalParameters": {
-                "githubEventName":  event,
-                "githubWorkflow":   workflow,
-                "githubRunId":      run_id,
-                "githubRunAttempt": run_attempt
-              },
-              "resolvedDependencies": [{
-                "uri": f"git+https://github.com/{repo}@refs/heads/{ref_name}",
-                "digest": {"gitCommit": sha}
-              }]
-            },
-            "runDetails": {
-              "builder": {
-                "id": f"https://github.com/{repo}/.github/workflows/supply-chain.yml@refs/heads/{ref_name}"
-              },
-              "metadata": {
-                "invocationId": f"https://github.com/{repo}/actions/runs/{run_id}/attempts/{run_attempt}",
-                "startedOn":  timestamp,
-                "finishedOn": timestamp
-              }
-            }
-          }
-
-          with open("provenance.json", "w") as f:
-            json.dump(provenance, f, indent=2)
-
-          print("✅ Provenance generated")
-          print(f"   Builder  : {provenance['runDetails']['builder']['id']}")
-          print(f"   Cloud    : {cloud}")
-          print(f"   Commit   : {sha}")
-          PYEOF
+          python3 scripts/gen_provenance.py
 
           cosign attest --yes \
             --predicate provenance.json \
             --type slsaprovenance1 \
             "${IMAGE_REF}"
-          echo "✅ Provenance attested"
+          echo "Provenance attested"
 
-      # ── STEP 8 — Verify all attestations ──────────────────────────────────
+      # --- Verify attestations ---------------------------------------------
+      # Re-verify everything from scratch to confirm the full attestation chain
+      # is intact before we proceed to cluster deployment.
 
-      - name: Verify signature + attestations
+      - name: Verify signature and attestations
         run: |
           CERT_REGEXP="https://github.com/${{ github.repository }}.*"
           CERT_ISSUER="https://token.actions.githubusercontent.com"
@@ -259,35 +207,35 @@ jobs:
             --certificate-identity-regexp "${CERT_REGEXP}" \
             --certificate-oidc-issuer "${CERT_ISSUER}" \
             "${IMAGE_REF}"
-          echo "✅ Signature verified"
+          echo "Signature verified"
 
           cosign verify-attestation \
             --certificate-identity-regexp "${CERT_REGEXP}" \
             --certificate-oidc-issuer "${CERT_ISSUER}" \
             --type cyclonedx "${IMAGE_REF}" \
             | jq -r '.payload | @base64d | fromjson |
-                "✅ SBOM verified — components: \(.predicate.components | length)"'
+                "SBOM verified — components: \(.predicate.components | length)"'
 
           cosign verify-attestation \
             --certificate-identity-regexp "${CERT_REGEXP}" \
             --certificate-oidc-issuer "${CERT_ISSUER}" \
             --type slsaprovenance1 "${IMAGE_REF}" \
             | jq -r '.payload | @base64d | fromjson |
-                "✅ Provenance verified — builder: \(.predicate.runDetails.builder.id)"'
+                "Provenance verified — builder: \(.predicate.runDetails.builder.id)"'
 
-          echo "── cosign tree ──"
+          echo "--- attestation tree ---"
           cosign tree "${IMAGE_REF}"
 
-      # ── STEP 9 — Kubeconfig (cloud-specific) ──────────────────────────────
+      # --- Kubeconfig (cloud-specific) -------------------------------------
 
-      - name: Kubeconfig — EKS (AWS)
+      - name: Kubeconfig — EKS
         if: matrix.cloud == 'aws'
         run: |
           aws eks update-kubeconfig \
             --region "${{ secrets.AWS_REGION }}" \
             --name "${{ secrets.EKS_CLUSTER_NAME }}"
 
-      - name: Kubeconfig — AKS (Azure)
+      - name: Kubeconfig — AKS
         if: matrix.cloud == 'azure'
         run: |
           az aks get-credentials \
@@ -295,60 +243,38 @@ jobs:
             --name "${{ secrets.AKS_CLUSTER_NAME }}" \
             --overwrite-existing
 
-      - name: Exclude default namespace from Kyverno webhooks
+      # Exclude the default namespace from Kyverno webhooks. The smoke test
+      # runs in supply-chain-demo, but kubectl itself creates objects in default
+      # during connection setup and those should not be intercepted.
+      - name: Exclude default namespace from Kyverno
         run: |
-          kubectl label namespace default             kyverno.io/exclude=always --overwrite 2>/dev/null || true
-          echo "✅ default namespace excluded from Kyverno"
+          kubectl label namespace default kyverno.io/exclude=always \
+            --overwrite 2>/dev/null || true
 
-      - name: Force Kyverno webhooks to Ignore
+      # Force Kyverno webhooks to failurePolicy=Ignore so that a brief webhook
+      # unavailability does not block unrelated kubectl operations. Kyverno 3.1.4
+      # does not respect the Helm value for this — must be patched directly.
+      - name: Set Kyverno webhooks to failurePolicy=Ignore
         run: |
           for cfg in kyverno-policy-mutating-webhook-cfg \
                      kyverno-resource-mutating-webhook-cfg; do
-            COUNT=$(kubectl get mutatingwebhookconfiguration ${cfg} \
+            COUNT=$(kubectl get mutatingwebhookconfiguration "${cfg}" \
               -o jsonpath='{.webhooks}' \
               | python3 -c "import sys,json; print(len(json.load(sys.stdin)))" \
               2>/dev/null || echo 1)
             PATCH=$(python3 -c "import json; n=int('${COUNT}'); \
               print(json.dumps([{'op':'replace','path':f'/webhooks/{i}/failurePolicy','value':'Ignore'} \
               for i in range(n)]))")
-            kubectl patch mutatingwebhookconfiguration ${cfg} \
+            kubectl patch mutatingwebhookconfiguration "${cfg}" \
               --type=json -p="${PATCH}" 2>/dev/null || true
           done
-          for cfg in $(kubectl get validatingwebhookconfigurations \
-            --no-headers -o name | grep kyverno); do
-            COUNT=$(kubectl get ${cfg} \
-              -o jsonpath='{.webhooks}' \
-              | python3 -c "import sys,json; print(len(json.load(sys.stdin)))" \
-              2>/dev/null || echo 1)
-            PATCH=$(python3 -c "import json; n=int('${COUNT}'); \
-              print(json.dumps([{'op':'replace','path':f'/webhooks/{i}/failurePolicy','value':'Ignore'} \
-              for i in range(n)]))")
-            kubectl patch ${cfg} --type=json -p="${PATCH}" 2>/dev/null || true
-          done
-          echo "✅ All Kyverno webhooks set to Ignore"
 
-      # ── STEP 10 — Smoke test on cluster ───────────────────────────────────
+      # --- Smoke test ------------------------------------------------------
+      # Resolve the digest from the registry (digest env var may not persist
+      # across steps in matrix jobs) and deploy an ephemeral pod to confirm
+      # the image pulls and runs correctly on the cluster.
 
-      - name: Wait for Kyverno to be healthy
-        run: |
-          echo "Checking Kyverno health before proceeding..."
-
-          # Wait for admission controller deployment
-          kubectl rollout status deployment/kyverno-admission-controller             -n kyverno --timeout=120s || true
-
-          # Wait for webhook to be responsive — try a dry-run admission
-          for i in $(seq 1 20); do
-            RESULT=$(kubectl create namespace kyverno-probe-$$               --dry-run=server 2>&1 || true)
-            if echo "${RESULT}" | grep -qv "context deadline exceeded"; then
-              echo "  ✅ Kyverno webhook is responding"
-              break
-            fi
-            echo "  webhook not ready yet (${i}/20) — waiting 10s..."
-            [ "${i}" = "20" ] && echo "⚠️  webhook still slow, proceeding anyway"
-            sleep 10
-          done
-
-      - name: Smoke test on cluster
+      - name: Smoke test
         run: |
           if [ "${{ matrix.cloud }}" = "aws" ]; then
             DIGEST_REF=$(aws ecr describe-images \
@@ -364,10 +290,8 @@ jobs:
               --query digest --output tsv)
             DIGEST_REF="${REGISTRY}/${REPO}@${_DIG}"
           fi
-          echo "DIGEST_REF=${DIGEST_REF}" 
-          echo "Using: ${DIGEST_REF}"
+          echo "Image: ${DIGEST_REF}"
 
-          # Run in supply-chain-demo namespace
           kubectl delete pod smoke-test -n supply-chain-demo --ignore-not-found
           kubectl wait pod/smoke-test -n supply-chain-demo \
             --for=delete --timeout=60s 2>/dev/null || true
@@ -381,45 +305,34 @@ jobs:
           for i in $(seq 1 30); do
             PHASE=$(kubectl get pod smoke-test -n supply-chain-demo \
               -o jsonpath='{.status.phase}' 2>/dev/null || echo "Pending")
-            [ "${PHASE}" = "Succeeded" ] && echo "✅ Smoke test passed (${{ matrix.cloud }})" && break
+            [ "${PHASE}" = "Succeeded" ] && echo "Smoke test passed" && break
             [ "${PHASE}" = "Failed"    ] && kubectl logs smoke-test -n supply-chain-demo && exit 1
-            [ "${i}"     = "30"        ] && echo "❌ Timed out" && exit 1
+            [ "${i}"     = "30"        ] && echo "Timed out waiting for smoke test" && exit 1
             sleep 3
           done
 
           kubectl delete pod smoke-test -n supply-chain-demo --ignore-not-found
 
-      # ── STEP 11 — Apply Kyverno policies (Enforce) ────────────────────────
-      # Policy logic is written once. Only the registry URL differs.
-      # Injected from kyverno/values/<cloud>.env at apply time.
+      # --- Apply Kyverno policies ------------------------------------------
+      # Policies are written once and stored in kyverno/. The registry URL
+      # (REGISTRY_PLACEHOLDER) is substituted at apply time from the per-cloud
+      # values file. This is what makes the policies cloud-agnostic.
 
-      - name: Apply Kyverno policies (Enforce)
+      - name: Apply Kyverno policies
         run: |
-          # ── Wait for Kyverno CRDs to exist ──────────────────────────────
-          echo "Waiting for Kyverno CRDs..."
+          # Wait for CRDs in case Kyverno was just installed
           for i in $(seq 1 30); do
-            if kubectl get crd clusterpolicies.kyverno.io >/dev/null 2>&1; then
-              echo "  ✅ CRDs ready"
-              break
-            fi
-            [ "${i}" = "30" ] && echo "❌ Kyverno CRDs never appeared" && exit 1
-            echo "  waiting... (${i}/30)"
+            kubectl get crd clusterpolicies.kyverno.io >/dev/null 2>&1 && break
+            [ "${i}" = "30" ] && echo "Kyverno CRDs not ready" && exit 1
             sleep 10
           done
 
-          # ── Wait for admission controller to be healthy ──────────────────
-          echo "Waiting for Kyverno admission controller..."
           kubectl rollout status deployment/kyverno-admission-controller \
             -n kyverno --timeout=120s
-
-          # ── Small buffer for webhook registration ────────────────────────
           sleep 10
 
-          # ── Inject registry and apply ────────────────────────────────────
           REGISTRY_VAL=$(grep '^REGISTRY=' kyverno/values/${{ matrix.cloud }}.env \
             | cut -d= -f2)
-
-          echo "Injecting registry: ${REGISTRY_VAL}"
 
           mkdir -p /tmp/kyverno-rendered
           for f in kyverno/verify-*.yaml; do
@@ -427,25 +340,23 @@ jobs:
               > "/tmp/kyverno-rendered/$(basename $f)"
           done
 
-          kubectl apply --server-side --force-conflicts \
-            -f /tmp/kyverno-rendered/
-
-          echo ""
+          kubectl apply --server-side --force-conflicts -f /tmp/kyverno-rendered/
           kubectl get clusterpolicies -o wide
 
-      # ── STEP 12 — Policy admission tests ──────────────────────────────────
+      # --- Admission tests -------------------------------------------------
+      # Three test cases validate that the policies work correctly:
+      #   TC-01: our signed image must be admitted
+      #   TC-02: image from wrong registry (nginx) must be blocked
+      #   TC-03: image from wrong registry (alpine) must be blocked
 
       - name: Create supply-chain-demo namespace
         run: |
           kubectl create namespace supply-chain-demo \
             --dry-run=client -o yaml | kubectl apply -f -
 
-      - name: "TC-01 — Signed image (ADMIT)"
+      - name: "TC-01 — Signed image must be ADMITTED"
         run: |
-          echo "════════════════════════════════════════"
-          echo "TC-01 [${{ matrix.cloud }}]: Signed image — expect ADMITTED"
-          echo "════════════════════════════════════════"
-
+          # Fetch digest directly — env var from build step may not persist here
           if [ "${{ matrix.cloud }}" = "aws" ]; then
             DIGEST_REF=$(aws ecr describe-images \
               --repository-name "${REPO}" \
@@ -460,8 +371,7 @@ jobs:
               --query digest --output tsv)
             DIGEST_REF="${REGISTRY}/${REPO}@${_DIG}"
           fi
-          echo "DIGEST_REF=${DIGEST_REF}" 
-          echo "Using: ${DIGEST_REF}"
+          echo "TC-01 image: ${DIGEST_REF}"
 
           kubectl delete pod tc-01 -n supply-chain-demo --ignore-not-found
           sleep 2
@@ -473,20 +383,16 @@ jobs:
             --command -- sh -c 'echo tc-01-ok' 2>&1) && ADMITTED=true || ADMITTED=false
 
           if [ "${ADMITTED}" = "true" ]; then
-            echo "✅ TC-01 PASS — signed image ADMITTED"
+            echo "TC-01 PASS — signed image admitted"
             kubectl delete pod tc-01 -n supply-chain-demo --ignore-not-found
           else
-            echo "❌ TC-01 FAIL — signed image was unexpectedly BLOCKED"
+            echo "TC-01 FAIL — signed image was unexpectedly blocked"
             echo "${OUTPUT}"
             exit 1
           fi
 
-      - name: "TC-02 — nginx (BLOCK)"
+      - name: "TC-02 — nginx must be BLOCKED (wrong registry)"
         run: |
-          echo "════════════════════════════════════════"
-          echo "TC-02 [${{ matrix.cloud }}]: nginx — expect BLOCKED"
-          echo "════════════════════════════════════════"
-
           kubectl delete pod tc-02 -n supply-chain-demo --ignore-not-found
           sleep 2
 
@@ -497,19 +403,15 @@ jobs:
             --command -- sh -c 'echo tc-02' 2>&1) && ADMITTED=true || ADMITTED=false
 
           if [ "${ADMITTED}" = "false" ]; then
-            echo "✅ TC-02 PASS — nginx BLOCKED (unapproved registry)"
+            echo "TC-02 PASS — nginx blocked"
           else
-            echo "❌ TC-02 FAIL — nginx was admitted"
+            echo "TC-02 FAIL — nginx was admitted"
             kubectl delete pod tc-02 -n supply-chain-demo --ignore-not-found
             exit 1
           fi
 
-      - name: "TC-03 — alpine (BLOCK)"
+      - name: "TC-03 — alpine must be BLOCKED (wrong registry)"
         run: |
-          echo "════════════════════════════════════════"
-          echo "TC-03 [${{ matrix.cloud }}]: alpine — expect BLOCKED"
-          echo "════════════════════════════════════════"
-
           kubectl delete pod tc-03 -n supply-chain-demo --ignore-not-found
           sleep 2
 
@@ -520,26 +422,27 @@ jobs:
             --command -- sh -c 'echo tc-03' 2>&1) && ADMITTED=true || ADMITTED=false
 
           if [ "${ADMITTED}" = "false" ]; then
-            echo "✅ TC-03 PASS — alpine BLOCKED (unapproved registry)"
+            echo "TC-03 PASS — alpine blocked"
           else
-            echo "❌ TC-03 FAIL — alpine was admitted"
+            echo "TC-03 FAIL — alpine was admitted"
             kubectl delete pod tc-03 -n supply-chain-demo --ignore-not-found
             exit 1
           fi
 
-      - name: Pipeline summary
+      - name: Summary
         if: always()
         run: |
-          echo "════════════════════════════════════════════════════════"
-          echo "  Supply Chain Pipeline — ${{ matrix.cloud }} — Summary"
-          echo "════════════════════════════════════════════════════════"
-          echo "  Image    : ${FULL_IMAGE}"
-          echo "  Digest   : ${DIGEST}"
-          echo "  Signed   : ✅ Cosign keyless (Sigstore)"
-          echo "  SBOM     : ✅ CycloneDX (Syft)"
-          echo "  Provenance: ✅ SLSA v1.0"
-          echo "  Policies : ✅ Enforce mode (3 ClusterPolicies)"
-          echo "  TC-01    : ✅ Signed image admitted"
-          echo "  TC-02    : ✅ nginx blocked"
-          echo "  TC-03    : ✅ alpine blocked"
-          echo "════════════════════════════════════════════════════════"
+          echo "========================================================"
+          echo "  Supply Chain Pipeline — ${{ matrix.cloud }}"
+          echo "========================================================"
+          echo "  Image     : ${FULL_IMAGE}"
+          echo "  Digest    : ${DIGEST}"
+          echo "  Signed    : Cosign keyless (Sigstore/Fulcio/Rekor)"
+          echo "  SBOM      : CycloneDX via Syft"
+          echo "  Provenance: SLSA v1.0"
+          echo "  Policies  : Enforce (verify-image-signature,"
+          echo "              verify-sbom-cyclonedx, verify-slsa-provenance)"
+          echo "  TC-01     : signed image admitted"
+          echo "  TC-02     : nginx blocked"
+          echo "  TC-03     : alpine blocked"
+          echo "========================================================"
