@@ -357,11 +357,10 @@ jobs:
               --query 'imageDetails[0].imageDigest' \
               --output text | xargs -I{} echo "${REGISTRY}/${REPO}@{}")
           else
-            _DIG=$(az acr manifest list-metadata \
-              --registry "${{ secrets.ACR_LOGIN_SERVER }}" \
-              --name "${REPO}" \
-              --output tsv \
-              --query "[?contains(tags, '${IMAGE_TAG}')].digest | [0]")
+            _DIG=$(az acr repository show \
+              --name "${{ secrets.ACR_LOGIN_SERVER }}" \
+              --image "${REPO}:${IMAGE_TAG}" \
+              --query digest --output tsv)
             DIGEST_REF="${REGISTRY}/${REPO}@${_DIG}"
           fi
           echo "DIGEST_REF=${DIGEST_REF}" 
@@ -454,11 +453,10 @@ jobs:
               --query 'imageDetails[0].imageDigest' \
               --output text | xargs -I{} echo "${REGISTRY}/${REPO}@{}")
           else
-            _DIG=$(az acr manifest list-metadata \
-              --registry "${{ secrets.ACR_LOGIN_SERVER }}" \
-              --name "${REPO}" \
-              --output tsv \
-              --query "[?contains(tags, '${IMAGE_TAG}')].digest | [0]")
+            _DIG=$(az acr repository show \
+              --name "${{ secrets.ACR_LOGIN_SERVER }}" \
+              --image "${REPO}:${IMAGE_TAG}" \
+              --query digest --output tsv)
             DIGEST_REF="${REGISTRY}/${REPO}@${_DIG}"
           fi
           echo "DIGEST_REF=${DIGEST_REF}" 
