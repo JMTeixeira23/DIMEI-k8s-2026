@@ -343,33 +343,3 @@ resource "aws_eks_access_policy_association" "github_actions_admin" {
 
   depends_on = [aws_eks_access_entry.github_actions]
 }
-
-# ─────────────────────────────────────────────────────────────────────────────
-# AWS-AUTH CONFIGMAP
-# ─────────────────────────────────────────────────────────────────────────────
-
-resource "kubernetes_config_map_v1_data" "aws_auth" {
-  metadata {
-    name      = "aws-auth"
-    namespace = "kube-system"
-  }
-
-  data = {
-    mapRoles = yamlencode([
-      {
-        rolearn  = aws_iam_role.eks_nodes.arn
-        username = "system:node:{{EC2PrivateDNSName}}"
-        groups   = ["system:bootstrappers", "system:nodes"]
-      },
-      {
-        rolearn  = aws_iam_role.github_actions.arn
-        username = "github-actions"
-        groups   = ["system:masters"]
-      }
-    ])
-  }
-
-  force = true
-
-  depends_on = [aws_eks_cluster.main]
-}
