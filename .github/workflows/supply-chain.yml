@@ -152,9 +152,9 @@ jobs:
       # Attached as a signed attestation so Kyverno can verify it at admission.
 
       - name: Install Syft
-        uses: anchore/sbom-action/download-syft@v0
-        with:
-          syft-version: v0.105.1
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh \
+            | sh -s -- -b /usr/local/bin v0.105.1
 
       - name: Generate and attest SBOM
         run: |
