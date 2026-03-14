@@ -350,7 +350,8 @@ jobs:
       - name: Smoke test on cluster
         run: |
           # Read from file if env var empty
-          [ -z "${DIGEST_REF}" ] && DIGEST_REF=$(cat /tmp/digest_ref.txt)
+          [ -z "${DIGEST_REF}" ] && [ -f /tmp/digest_ref.txt ] && DIGEST_REF=$(cat /tmp/digest_ref.txt)
+          if [ -z "${DIGEST_REF}" ]; then echo "ERROR: DIGEST_REF empty"; exit 1; fi
           echo "Using: ${DIGEST_REF}"
 
           # Run in supply-chain-demo namespace
@@ -423,26 +424,41 @@ jobs:
 
       - name: Resolve image digest for policy tests
         run: |
-          if [ "${{ matrix.cloud }}" = "aws" ]; then
+          echo "IMAGE_TAG=${IMAGE_TAG}"
+          echo "REGISTRY=${REGISTRY}"
+          echo "REPO=${REPO}"
+          echo "DIGEST=${DIGEST}"
+
+          # Use DIGEST from build step if available (set via GITHUB_ENV)
+          if [ -n "${DIGEST}" ]; then
+            LIVE_DIGEST="${DIGEST}"
+            echo "Using DIGEST from build step: ${LIVE_DIGEST}"
+          elif [ "${{ matrix.cloud }}" = "aws" ]; then
             LIVE_DIGEST=$(aws ecr describe-images \
               --repository-name "${REPO}" \
               --region "${{ secrets.AWS_REGION }}" \
               --image-ids imageTag="${IMAGE_TAG}" \
               --query 'imageDetails[0].imageDigest' \
               --output text)
+            echo "Fetched from ECR: ${LIVE_DIGEST}"
           else
             LIVE_DIGEST=$(az acr manifest list-metadata \
               --registry "${{ secrets.ACR_LOGIN_SERVER }}" \
               --name "${REPO}" \
               --output tsv \
               --query "[?contains(tags, '${IMAGE_TAG}')].digest | [0]")
+            echo "Fetched from ACR: ${LIVE_DIGEST}"
           fi
+
+          if [ -z "${LIVE_DIGEST}" ]; then
+            echo "ERROR: could not resolve digest"
+            exit 1
+          fi
+
           DIGEST_REF="${REGISTRY}/${REPO}@${LIVE_DIGEST}"
-          echo "Resolved digest: ${DIGEST_REF}"
-          # Persist via file AND env — double insurance
+          echo "DIGEST_REF=${DIGEST_REF}"
           echo "${DIGEST_REF}" > /tmp/digest_ref.txt
           echo "DIGEST_REF=${DIGEST_REF}" >> $GITHUB_ENV
-          echo "LIVE_DIGEST=${LIVE_DIGEST}" >> $GITHUB_ENV
 
       - name: Create supply-chain-demo namespace
         run: |
@@ -456,7 +472,8 @@ jobs:
           echo "════════════════════════════════════════"
 
           # Read from file if env var empty
-          [ -z "${DIGEST_REF}" ] && DIGEST_REF=$(cat /tmp/digest_ref.txt)
+          [ -z "${DIGEST_REF}" ] && [ -f /tmp/digest_ref.txt ] && DIGEST_REF=$(cat /tmp/digest_ref.txt)
+          if [ -z "${DIGEST_REF}" ]; then echo "ERROR: DIGEST_REF empty"; exit 1; fi
           echo "Using: ${DIGEST_REF}"
 
           kubectl delete pod tc-01 -n supply-chain-demo --ignore-not-found
