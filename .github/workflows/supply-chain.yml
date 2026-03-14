@@ -36,6 +36,7 @@ permissions:
 
 env:
   IMAGE_TAG: ${{ github.sha }}-${{ github.run_id }}
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   supply-chain:
