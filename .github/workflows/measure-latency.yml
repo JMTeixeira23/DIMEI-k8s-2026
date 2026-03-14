@@ -37,7 +37,7 @@ permissions:
   actions: read
 
 env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
   measure:
@@ -449,6 +449,9 @@ jobs:
           - cloud: azure
 
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Check cloud selection
         run: |
           SELECTED="${{ inputs.cloud }}"
