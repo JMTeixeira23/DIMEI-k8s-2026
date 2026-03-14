@@ -40,15 +40,40 @@ kubectl wait node --all --for=condition=Ready --timeout=300s
 echo "  ✅ Nodes ready"
 kubectl get nodes
 
-# ── Step 3: Install Kyverno via Helm ─────────────────────────────────────────
+# ── Step 3: Sync Kyverno IAM role trust policy via Terraform ─────────────────
+# The trust policy must reference the current cluster's OIDC provider ID.
+# Every rebuild creates a new OIDC provider — Terraform updates the trust policy.
+echo ""
+echo "▶ Syncing Kyverno IAM role trust policy..."
+cd terraform/aws
+
+# Import role if not already in state
+terraform state show aws_iam_role.kyverno_ecr >/dev/null 2>&1 || \
+  terraform import aws_iam_role.kyverno_ecr kyverno-ecr-read 2>/dev/null || true
+
+terraform state show aws_iam_role_policy_attachment.kyverno_ecr_read >/dev/null 2>&1 || \
+  terraform import aws_iam_role_policy_attachment.kyverno_ecr_read \
+    "kyverno-ecr-read/arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly" 2>/dev/null || true
+
+terraform apply \
+  -var="github_org=JMTeixeira23" \
+  -var="github_repo=DIMEI-k8s-2026" \
+  -target=aws_iam_role.kyverno_ecr \
+  -target=aws_iam_role_policy_attachment.kyverno_ecr_read \
+  -auto-approve
+
+KYVERNO_ROLE_ARN=$(terraform output -raw kyverno_role_arn 2>/dev/null || \
+  aws iam get-role --role-name kyverno-ecr-read \
+    --query 'Role.Arn' --output text)
+
+cd ../..
+echo "  Kyverno role ARN: ${KYVERNO_ROLE_ARN}"
+
+# ── Step 4: Install Kyverno via Helm ─────────────────────────────────────────
 echo ""
 echo "▶ Installing Kyverno ${KYVERNO_VERSION}..."
 helm repo add kyverno https://kyverno.github.io/kyverno/ 2>/dev/null || true
 helm repo update kyverno
-
-KYVERNO_ROLE_ARN=$(cd terraform/aws && terraform output -raw kyverno_role_arn 2>/dev/null || \
-  aws iam get-role --role-name kyverno-ecr-read \
-    --query 'Role.Arn' --output text)
 
 echo "  Kyverno IRSA role: ${KYVERNO_ROLE_ARN}"
 
