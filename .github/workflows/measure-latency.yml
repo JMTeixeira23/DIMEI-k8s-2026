@@ -417,12 +417,10 @@ jobs:
               --predicate /tmp/sbom-${SIZE}.json \
               "${IMAGE_REF}"
 
-            printf '{"buildDefinition":{"buildType":"https://slsa.dev/container-based-build/v0.1",
-' > /tmp/prov-${SIZE}.json
-            printf '"externalParameters":{"size":"%s"}},
-' "${SIZE}" >> /tmp/prov-${SIZE}.json
+            printf '{"buildDefinition":{"buildType":"https://slsa.dev/container-based-build/v0.1",' > /tmp/prov-${SIZE}.json
+            printf '"externalParameters":{"size":"%s"}},' "${SIZE}" >> /tmp/prov-${SIZE}.json
             printf '"runDetails":{"builder":{"id":"https://github.com/%s/actions/runs/%s"}}}
-' \
+ \
               "${{ github.repository }}" "${{ github.run_id }}" >> /tmp/prov-${SIZE}.json
             cosign attest --yes \
               --type slsaprovenance1 \
