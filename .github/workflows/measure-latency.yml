@@ -417,7 +417,9 @@ jobs:
               --predicate /tmp/sbom-${SIZE}.json \
               "${IMAGE_REF}"
 
-            python3 -c "import json; f=open('/tmp/prov-${SIZE}.json','w'); json.dump({'buildDefinition':{'buildType':'https://slsa.dev/container-based-build/v0.1','externalParameters':{'size':'${SIZE}'}},'runDetails':{'builder':{'id':'https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}'}}}},f)"
+            cat > /tmp/prov-${SIZE}.json << PROVEOF
+{"buildDefinition":{"buildType":"https://slsa.dev/container-based-build/v0.1","externalParameters":{"size":"${SIZE}"}},"runDetails":{"builder":{"id":"https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"}}}
+            PROVEOF
             cosign attest --yes \
               --type slsaprovenance1 \
               --predicate /tmp/prov-${SIZE}.json \
