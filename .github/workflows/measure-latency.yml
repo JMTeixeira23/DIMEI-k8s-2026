@@ -388,7 +388,7 @@ jobs:
             | sh -s -- -b /usr/local/bin v0.105.1
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Build, push, sign and attest all size images
         run: |
