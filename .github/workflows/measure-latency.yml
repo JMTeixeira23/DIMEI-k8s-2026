@@ -417,9 +417,9 @@ jobs:
               --predicate /tmp/sbom-${SIZE}.json \
               "${IMAGE_REF}"
 
-            cat > /tmp/prov-${SIZE}.json << PROVEOF
-{"buildDefinition":{"buildType":"https://slsa.dev/container-based-build/v0.1","externalParameters":{"size":"${SIZE}"}},"runDetails":{"builder":{"id":"https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"}}}
-            PROVEOF
+            REPO_URL="https://github.com/${{ github.repository }}"
+            RUN_ID="${{ github.run_id }}"
+            echo "{\"buildDefinition\":{\"buildType\":\"https://slsa.dev/container-based-build/v0.1\",\"externalParameters\":{\"size\":\"${SIZE}\"}},\"runDetails\":{\"builder\":{\"id\":\"${REPO_URL}/actions/runs/${RUN_ID}\"}}}" > /tmp/prov-${SIZE}.json
             cosign attest --yes \
               --type slsaprovenance1 \
               --predicate /tmp/prov-${SIZE}.json \
