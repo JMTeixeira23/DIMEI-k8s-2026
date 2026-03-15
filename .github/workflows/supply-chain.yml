@@ -429,6 +429,59 @@ jobs:
             exit 1
           fi
 
+      - name: "TC-04 — Unsigned image from approved registry must be BLOCKED"
+        run: |
+          # Build and push an image without signing — from the correct registry.
+          # Tests that registry origin alone is not sufficient for admission.
+          TC04_TAG="tc04-unsigned-${{ github.run_id }}"
+          TC04_IMAGE="${REGISTRY}/${REPO}:${TC04_TAG}"
+
+          docker build --tag "${TC04_IMAGE}" docker/hello-world
+          docker push "${TC04_IMAGE}"
+
+          kubectl delete pod tc-04 -n supply-chain-demo --ignore-not-found
+          sleep 2
+
+          OUTPUT=$(kubectl run tc-04 \
+            --image="${TC04_IMAGE}" \
+            --restart=Never \
+            --namespace=supply-chain-demo \
+            --command -- sh -c 'echo tc-04' 2>&1) && ADMITTED=true || ADMITTED=false
+
+          if [ "${ADMITTED}" = "false" ]; then
+            echo "TC-04 PASS — unsigned image from approved registry blocked"
+          else
+            echo "TC-04 FAIL — unsigned image was admitted"
+            kubectl delete pod tc-04 -n supply-chain-demo --ignore-not-found
+            exit 1
+          fi
+
+      - name: "TC-05 — Policy scoping: unsigned image must be ADMITTED in default namespace"
+        run: |
+          # Re-uses the unsigned image from TC-04 to verify that Kyverno policies
+          # are scoped to supply-chain-demo only and do not block the default namespace.
+          TC04_TAG="tc04-unsigned-${{ github.run_id }}"
+          TC04_IMAGE="${REGISTRY}/${REPO}:${TC04_TAG}"
+
+          kubectl delete pod tc-05-scope -n default --ignore-not-found
+          sleep 2
+
+          OUTPUT=$(kubectl run tc-05-scope \
+            --image="${TC04_IMAGE}" \
+            --restart=Never \
+            --namespace=default \
+            --command -- sh -c 'echo tc-05-admitted' 2>&1) && ADMITTED=true || ADMITTED=false
+
+          if [ "${ADMITTED}" = "true" ]; then
+            echo "TC-05 PASS — unsigned image admitted in default namespace (policies correctly scoped)"
+            kubectl delete pod tc-05-scope -n default --ignore-not-found
+          else
+            echo "TC-05 FAIL — image unexpectedly blocked in default namespace"
+            echo "Policies may be leaking outside supply-chain-demo scope"
+            echo "${OUTPUT}"
+            exit 1
+          fi
+
       - name: Summary
         if: always()
         run: |
@@ -445,4 +498,6 @@ jobs:
           echo "  TC-01     : signed image admitted"
           echo "  TC-02     : nginx blocked"
           echo "  TC-03     : alpine blocked"
+          echo "  TC-04     : unsigned from approved registry blocked"
+          echo "  TC-05     : namespace scoping confirmed (default ns admitted)"
           echo "========================================================"

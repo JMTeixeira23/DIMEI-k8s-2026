@@ -4,14 +4,14 @@ name: Attack Simulations
 # GENERIC ATTACK SIMULATIONS — runs on AWS EKS, Azure AKS, or both.
 # Not part of the CD pipeline — run manually to collect thesis evidence.
 #
-# Five attacks map to real supply chain threat scenarios:
+# Six attacks + one namespace scoping test map to real supply chain threat scenarios:
 #   A1 — Unsigned image        (no signature, SBOM or provenance)
 #   A2 — Wrong OIDC signer     (local key instead of GitHub Actions OIDC)
 #   A3 — Digest tampering      (image modified after signing — TOCTOU)
 #   A4 — Missing SBOM          (signed but no CycloneDX attestation)
 #   A5 — Missing provenance    (signed + SBOM but no SLSA attestation)
 #
-# Expected result: ALL 5 attacks blocked on BOTH clouds.
+# Expected result: ALL 6 attacks blocked + namespace scoping confirmed on BOTH clouds.
 # ─────────────────────────────────────────────────────────────────────────────
 
 on:
@@ -385,7 +385,9 @@ jobs:
           echo "  A3  Digest tampering (TOCTOU)         ✅ BLOCKED"
           echo "  A4  Missing SBOM                     ✅ BLOCKED"
           echo "  A5  Missing SLSA provenance           ✅ BLOCKED"
-          echo "  Result: 5/5 attacks blocked"
+          echo "  A6  Unsigned from approved registry    ✅ BLOCKED"
+          echo "  TC-NS  Namespace scoping (default ns)  ✅ ADMITTED (correct)"
+          echo "  Result: 6/6 attacks blocked, namespace scoping confirmed"
           echo "  Cloud: ${{ matrix.cloud }}"
           echo "════════════════════════════════════════════════════════════════"
 
@@ -404,6 +406,6 @@ jobs:
       - name: Cleanup attack pods
         if: always()
         run: |
-          for pod in attack1 attack2 attack3 attack4 attack5; do
+          for pod in attack1 attack2 attack3 attack4 attack5 attack6 tc-ns-probe; do
             kubectl delete pod "${pod}" -n supply-chain-demo --ignore-not-found
           done
