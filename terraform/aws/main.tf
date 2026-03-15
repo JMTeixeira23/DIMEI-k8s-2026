@@ -296,6 +296,11 @@ resource "aws_ecr_repository" "main" {
   name                 = var.ecr_repo_name
   image_tag_mutability = "MUTABLE"
 
+  # force_delete allows terraform destroy to succeed even when the repository
+  # contains images. Without this, every destroy requires a manual aws ecr
+  # delete-repository --force beforehand.
+  force_delete = true
+
   image_scanning_configuration {
     scan_on_push = true
   }
