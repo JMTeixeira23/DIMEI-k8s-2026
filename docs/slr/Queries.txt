@@ -1,0 +1,54 @@
+Q01:
+("software supply chain security" OR "supply chain attacks")
+AND ("Kubernetes security" OR "Kubernetes admission control")
+
+Q02:
+("software supply chain security" OR "supply chain attacks")
+AND ("cryptographic signing" OR "container image signing"
+OR "Sigstore Cosign")
+
+Q03:
+("software supply chain security" OR "supply chain attacks")
+AND ("provenance verification" OR "SLSA provenance" OR "in-toto")
+
+Q04:
+("software supply chain security" OR "supply chain attacks")
+AND ("SBOM" OR "SPDX" OR "CycloneDX")
+
+Q05:
+("software supply chain security" OR "supply chain attacks")
+AND ("policy enforcement" OR "Kyverno" OR "OPA Gatekeeper")
+
+Q06:
+("software supply chain security" OR "supply chain attacks")
+AND "multi-cloud Kubernetes"
+
+Q07:
+("Kubernetes security" OR "Kubernetes admission control")
+AND ("cryptographic signing" OR "container image signing"
+OR "Sigstore Cosign")
+
+Q08:
+("Kubernetes security" OR "Kubernetes admission control")
+AND ("SLSA provenance" OR "provenance verification" OR "in-toto")
+
+Q09:
+("Kubernetes security" OR "Kubernetes admission control")
+AND ("SBOM" OR "CycloneDX" OR "SPDX")
+
+Q10:
+("Kubernetes security" OR "Kubernetes admission control")
+AND ("Kyverno" OR "OPA Gatekeeper" OR "policy enforcement")
+
+Q11:
+("Kubernetes security" OR "Kubernetes admission control")
+AND "multi-cloud"
+
+Q12:
+"Sigstore Cosign" AND ("supply chain" OR "Kubernetes")
+
+Q13:
+"SLSA provenance" AND ("Kubernetes" OR "container signing")
+
+Q14:
+"multi-cloud Kubernetes" AND ("security" OR "supply chain")
