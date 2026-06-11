@@ -23,46 +23,47 @@ Three Kyverno policies written once enforce identical security requirements on b
 
 ```
 .github/workflows/
-  supply-chain.yml        — CD pipeline (auto on docker/ push, matrix: aws + azure)
-  measure-latency.yml     — Latency measurement (manual, thesis data collection)
-  attack-simulations.yml  — Attack scenarios (manual, thesis evidence)
+  supply-chain-pipeline.yml         — CD pipeline (auto on docker/ push, matrix: aws + azure)
+  measure-admission-latency.yml     — Latency measurement (manual, thesis data collection)
+  attack-simulations.yml            — Attack scenarios (manual, thesis evidence)
 
 docker/
-  hello-world/            — The workload under test (distroless image)
-  small/ medium/ large/ xlarge/  — Phase 4b size experiment images (5–400MB)
+  hello-world/                      — The workload under test (distroless image)
+  small/ medium/ large/ xlarge/     — Phase 4b size experiment images (5–400MB)
 
-kyverno/
-  verify-image-signature.yaml   — Requires valid Cosign keyless signature
-  verify-sbom-cyclonedx.yaml    — Requires signed CycloneDX SBOM attestation
-  verify-slsa-provenance.yaml   — Requires signed SLSA v1.0 provenance attestation
+policies/
+  verify-image-signature.yaml       — Requires valid Cosign keyless signature
+  verify-sbom-cyclonedx.yaml        — Requires signed CycloneDX SBOM attestation
+  verify-slsa-provenance.yaml       — Requires signed SLSA v1.0 provenance attestation
   values/
-    aws.env               — REGISTRY=812982728774.dkr.ecr.eu-west-1.amazonaws.com
-    azure.env             — REGISTRY=supplychainthesis.azurecr.io
+    aws.env                         — REGISTRY=812982728774.dkr.ecr.eu-west-1.amazonaws.com
+    azure.env                       — REGISTRY=supplychainthesis.azurecr.io
 
 scripts/
-  gen_provenance.py       — Generates SLSA provenance predicate (used by pipeline)
-  latency_stats.py        — Computes latency statistics (used by measure-latency.yml)
-  size_latency_stats.py   — Computes size/latency statistics (used by measure-latency.yml)
-  install-tools.sh        — Installs cosign, syft, crane locally
-  registry-login.sh       — Docker login for local use (dispatches on $CLOUD)
-  kubeconfig.sh           — kubectl context update for local use
-  cosign-sign.sh          — Local signing wrapper
-  cosign-verify.sh        — Local verification wrapper
-  smoke-test.sh           — Local smoke test
+  gen_provenance.py                 — Generates SLSA provenance predicate (used by pipeline)
+  latency_stats.py                  — Computes latency statistics (used by measure-latency.yml)
+  size_latency_stats.py             — Computes size/latency statistics (used by measure-latency.yml)
+  generate_charts.py                — Generates Phase 4 latency bar chart (run locally)
+  generate_size_charts.py           — Generates Phase 4b size/latency line chart (run locally)
+  local/
+    install-tools.sh                — Installs cosign, syft, crane locally
+    registry-login.sh               — Docker login for local use (dispatches on $CLOUD)
+    kubeconfig.sh                   — kubectl context update for local use
+    cosign-sign.sh                  — Local signing wrapper
+    cosign-verify.sh                — Local verification wrapper
+    smoke-test.sh                   — Local smoke test
+    env.aws                         — Local environment variables (source before make)
 
 docs/
-  generate_charts.py      — Generates Phase 4 latency bar chart (run locally)
-  generate_size_charts.py — Generates Phase 4b size/latency line chart (run locally)
-  figures/                — Chart output directory (created on first run)
+  literature/                       — Literature Queries
 
-terraform/
-  aws/                    — EKS + ECR + OIDC + IAM
-  azure/                  — AKS + ACR + Entra Workload Identity
+infrastructure/
+  aws/                              — EKS + ECR + OIDC + IAM
+  azure/                            — AKS + ACR + Entra Workload Identity
 
-bootstrap.sh              — Post-apply setup for AWS (Kyverno + policies + namespaces)
-bootstrap-azure.sh        — Post-apply setup for Azure
-env.aws                   — Local environment variables (source before make)
-Makefile                  — Local dev shortcuts
+bootstrap-aws.sh                    — Post-apply setup for AWS (Kyverno + policies + namespaces)
+bootstrap-azure.sh                  — Post-apply setup for Azure
+Makefile                            — Local dev shortcuts
 ```
 
 ---
@@ -81,7 +82,7 @@ Makefile                  — Local dev shortcuts
 | Docker | ≥ 24 |
 
 ```bash
-bash scripts/install-tools.sh   # installs cosign, syft, crane
+bash scripts/local/install-tools.sh   # installs cosign, syft, crane
 make deps                        # checks all tools are present
 ```
 
@@ -92,7 +93,7 @@ make deps                        # checks all tools are present
 ### AWS
 
 ```bash
-cd terraform/aws
+cd infrastructure/aws
 terraform init
 terraform apply \
   -var="github_org=JMTeixeira23" \
@@ -100,7 +101,7 @@ terraform apply \
   -auto-approve
 
 cd ../..
-bash bootstrap.sh
+bash bootstrap-aws.sh
 ```
 
 Bootstrap: configures kubeconfig, imports and updates the Kyverno IAM role trust policy (OIDC provider ID changes on each rebuild), installs Kyverno 3.1.4, patches webhook failure policies, applies the three ClusterPolicies, labels namespaces.
@@ -108,7 +109,7 @@ Bootstrap: configures kubeconfig, imports and updates the Kyverno IAM role trust
 ### Azure
 
 ```bash
-cd terraform/azure
+cd infrastructure/azure
 terraform apply \
   -var="github_org=JMTeixeira23" \
   -var="github_repo=DIMEI-k8s-2026" \
@@ -260,34 +261,34 @@ The full stack is reproducible from code. To verify:
 
 ```bash
 # Destroy
-cd terraform/aws   && terraform destroy -var="github_org=JMTeixeira23" -var="github_repo=DIMEI-k8s-2026" -auto-approve
+cd infrastructure/aws   && terraform destroy -var="github_org=JMTeixeira23" -var="github_repo=DIMEI-k8s-2026" -auto-approve
 cd ../azure        && terraform destroy -var="github_org=JMTeixeira23" -var="github_repo=DIMEI-k8s-2026" -var="location=northeurope" -auto-approve
 
 # Rebuild
-cd terraform/aws   && terraform apply -var="github_org=JMTeixeira23" -var="github_repo=DIMEI-k8s-2026" -auto-approve
+cd infrastructure/aws   && terraform apply -var="github_org=JMTeixeira23" -var="github_repo=DIMEI-k8s-2026" -auto-approve
 cd ../azure        && terraform apply -var="github_org=JMTeixeira23" -var="github_repo=DIMEI-k8s-2026" -var="location=northeurope" -auto-approve
 
 cd ~/DIMEI/DIMEI-k8s-2026
-bash bootstrap.sh
+bash bootstrap-aws.sh
 bash bootstrap-azure.sh
 # Update azure GitHub secrets from bootstrap-azure.sh output
 # Trigger: Supply Chain Security Pipeline → cloud: both
 ```
 
-Note: after rebuilding AWS, `bootstrap.sh` automatically imports the Kyverno IAM role into Terraform state and runs `terraform apply -target` to update the OIDC trust policy. This is necessary because the EKS OIDC provider ID changes on each rebuild.
+Note: after rebuilding AWS, `bootstrap-aws.sh` automatically imports the Kyverno IAM role into Terraform state and runs `terraform apply -target` to update the OIDC trust policy. This is necessary because the EKS OIDC provider ID changes on each rebuild.
 
 ---
 
 ## Troubleshooting
 
-**`cosign: command not found`** — run `scripts/install-tools.sh`
+**`cosign: command not found`** — run `scripts/local/install-tools.sh`
 
 **EKS nodes `NotReady`** — check VPC subnets have a route to the internet gateway
 
-**Kyverno webhook `context deadline exceeded`** — run `bash bootstrap.sh` again; it patches all webhooks to `failurePolicy=Ignore` and labels the default namespace to exclude it from interception
+**Kyverno webhook `context deadline exceeded`** — run `bash bootstrap-aws.sh` again; it patches all webhooks to `failurePolicy=Ignore` and labels the default namespace to exclude it from interception
 
 **Azure `AADSTS700016`** — Entra app IDs changed after rebuild; update GitHub secrets from `terraform output` or from bootstrap-azure.sh output
 
 **TC-01 blocked with `missing digest`** — policies have `verifyDigest: false` so this should not happen; check that the pipeline step that applies policies ran successfully before the test cases
 
-**Kyverno `401 Unauthorized` on ECR** — IRSA trust policy has the wrong OIDC provider ID; run `bash bootstrap.sh` which fixes this automatically
+**Kyverno `401 Unauthorized` on ECR** — IRSA trust policy has the wrong OIDC provider ID; run `bash bootstrap-aws.sh` which fixes this automatically

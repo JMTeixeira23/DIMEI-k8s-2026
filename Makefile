@@ -1,11 +1,11 @@
-# Makefile — local development shortcuts for the supply chain security project.
+scripts/local/env.aws# Makefile — local development shortcuts for the supply chain security project.
 #
 # All targets are cloud-agnostic and read configuration from environment
-# variables set by sourcing env.aws (or a future env.azure).
+# variables set by sourcing scripts/local/env.aws (or a future env.azure).
 #
 # Usage:
-#   source env.aws && make smoke-test
-#   source env.aws && make tf-apply
+#   source scripts/local/env.aws && make smoke-test
+#   source scripts/local/env.aws && make tf-apply
 
 SHELL  := /bin/bash
 .PHONY: help deps \
@@ -16,7 +16,7 @@ SHELL  := /bin/bash
 
 TAG ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "dev")
 
-IMAGE_REPO ?= $(error IMAGE_REPO not set — run: source env.aws)
+IMAGE_REPO ?= $(error IMAGE_REPO not set — run: source scripts/local/env.aws)
 FULL_IMAGE  = $(IMAGE_REPO):$(TAG)
 
 # ── Help ──────────────────────────────────────────────────────────────────────
@@ -24,7 +24,7 @@ FULL_IMAGE  = $(IMAGE_REPO):$(TAG)
 help:
 	@printf "\n"
 	@printf "Supply Chain Security — local tooling\n"
-	@printf "Active cloud: %s\n\n" "$(or $(CLOUD),not set — source env.aws)"
+	@printf "Active cloud: %s\n\n" "$(or $(CLOUD),not set — source scripts/local/env.aws)"
 	@printf "  deps            Check all required CLI tools are present\n\n"
 	@printf "  Terraform:\n"
 	@printf "    tf-init       terraform init\n"
@@ -35,7 +35,7 @@ help:
 	@printf "  Cluster:\n"
 	@printf "    kubeconfig    Update kubeconfig for active cloud\n"
 	@printf "    kyverno-status  Show Kyverno pods and ClusterPolicies\n\n"
-	@printf "  Image pipeline (source env.aws first):\n"
+	@printf "  Image pipeline (source scripts/local/env.aws first):\n"
 	@printf "    build         Build the hello-world image\n"
 	@printf "    registry-login  Authenticate Docker to the registry\n"
 	@printf "    push          Build + push to registry\n"
@@ -58,7 +58,7 @@ deps:
 # TF_DIR is set based on the CLOUD env var so the same targets work for both
 # AWS and Azure without separate make targets.
 
-TF_DIR = terraform/$(or $(CLOUD),$(error CLOUD not set — source env.aws))
+TF_DIR = infrastructure/$(or $(CLOUD),$(error CLOUD not set — source scripts/local/env.aws))
 
 TF_VARS_AWS   = -var="github_org=$(GITHUB_ORG)" -var="github_repo=$(GITHUB_REPO)"
 TF_VARS_AZURE = -var="github_org=$(GITHUB_ORG)" -var="github_repo=$(GITHUB_REPO)" -var="location=northeurope"
@@ -68,15 +68,15 @@ tf-init:
 	cd $(TF_DIR) && terraform init
 
 tf-plan:
-	@: $${GITHUB_ORG:?source env.aws first}
+	@: $${GITHUB_ORG:?source scripts/local/env.aws first}
 	cd $(TF_DIR) && terraform plan $(TF_VARS)
 
 tf-apply:
-	@: $${GITHUB_ORG:?source env.aws first}
+	@: $${GITHUB_ORG:?source scripts/local/env.aws first}
 	cd $(TF_DIR) && terraform apply $(TF_VARS) -auto-approve
 
 tf-destroy:
-	@: $${GITHUB_ORG:?source env.aws first}
+	@: $${GITHUB_ORG:?source scripts/local/env.aws first}
 	cd $(TF_DIR) && terraform destroy $(TF_VARS) -auto-approve
 
 tf-output:
@@ -85,8 +85,8 @@ tf-output:
 # ── Cluster ───────────────────────────────────────────────────────────────────
 
 kubeconfig:
-	@: $${CLOUD:?source env.aws first}
-	@scripts/kubeconfig.sh
+	@: $${CLOUD:?source scripts/local/env.aws first}
+	@scripts/local/kubeconfig.sh
 
 kyverno-status: kubeconfig
 	@echo "--- Kyverno pods ---"
@@ -103,8 +103,8 @@ build:
 	@echo "Built: $(FULL_IMAGE)"
 
 registry-login:
-	@: $${CLOUD:?source env.aws first}
-	@scripts/registry-login.sh
+	@: $${CLOUD:?source scripts/local/env.aws first}
+	@scripts/local/registry-login.sh
 
 push: build registry-login
 	@echo "Pushing $(FULL_IMAGE)..."
@@ -112,15 +112,15 @@ push: build registry-login
 	@echo "Pushed: $(FULL_IMAGE)"
 
 sign:
-	@: $${COSIGN_CERTIFICATE_OIDC_ISSUER:?source env.aws first}
-	@scripts/cosign-sign.sh "$(FULL_IMAGE)"
+	@: $${COSIGN_CERTIFICATE_OIDC_ISSUER:?source scripts/local/env.aws first}
+	@scripts/local/cosign-sign.sh "$(FULL_IMAGE)"
 
 verify:
-	@: $${COSIGN_CERTIFICATE_OIDC_ISSUER:?source env.aws first}
-	@scripts/cosign-verify.sh "$(FULL_IMAGE)"
+	@: $${COSIGN_CERTIFICATE_OIDC_ISSUER:?source scripts/local/env.aws first}
+	@scripts/local/cosign-verify.sh "$(FULL_IMAGE)"
 
 smoke-test: push sign verify kubeconfig
-	@scripts/smoke-test.sh "$(FULL_IMAGE)"
+	@scripts/local/smoke-test.sh "$(FULL_IMAGE)"
 
 clean:
 	docker rmi "$(FULL_IMAGE)" 2>/dev/null || true
