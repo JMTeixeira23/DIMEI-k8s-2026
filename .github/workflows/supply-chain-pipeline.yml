@@ -186,7 +186,7 @@ jobs:
 
           FULL_IMAGE="${FULL_IMAGE}" \
           BUILD_TIMESTAMP="${BUILD_TIMESTAMP}" \
-          python3 scripts/gen_provenance.py
+          python3 scripts/gen_slsa_provenance.py
 
           cosign attest --yes \
             --predicate provenance.json \
