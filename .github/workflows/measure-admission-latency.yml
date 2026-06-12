@@ -40,17 +40,29 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - id: set-matrix
+        run: |
+          if [ "${{ inputs.cloud }}" = "both" ]; then
+            echo 'matrix={"include":[{"cloud":"aws"},{"cloud":"azure"}]}' >> $GITHUB_OUTPUT
+          elif [ "${{ inputs.cloud }}" = "aws" ]; then
+            echo 'matrix={"include":[{"cloud":"aws"}]}' >> $GITHUB_OUTPUT
+          else
+            echo 'matrix={"include":[{"cloud":"azure"}]}' >> $GITHUB_OUTPUT
+          fi
   measure:
     name: Latency (${{ matrix.cloud }})
     runs-on: ubuntu-latest
     environment: ${{ matrix.cloud }}
+    needs: setup  
 
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - cloud: aws
-          - cloud: azure
+      matrix: ${{ fromJson(needs.setup.outputs.matrix) }}
 
     steps:
       - name: Checkout
@@ -202,10 +214,10 @@ jobs:
 
       - name: Restore policies in Audit mode
         run: |
-          REGISTRY_VAL=$(grep '^REGISTRY=' kyverno/values/${{ matrix.cloud }}.env \
+          REGISTRY_VAL=$(grep '^REGISTRY=' policies/values/${{ matrix.cloud }}.env \
             | cut -d= -f2)
           mkdir -p /tmp/kyverno-audit
-          for f in kyverno/verify-*.yaml; do
+          for f in policies/verify-*.yaml; do
             sed "s|REGISTRY_PLACEHOLDER|${REGISTRY_VAL}|g" "$f" \
               | sed "s/validationFailureAction: .*/validationFailureAction: Audit/" \
               | sed "s/mutateDigest: .*/mutateDigest: false/" \
@@ -246,10 +258,10 @@ jobs:
 
       - name: Switch policies to Enforce mode
         run: |
-          REGISTRY_VAL=$(grep '^REGISTRY=' kyverno/values/${{ matrix.cloud }}.env \
+          REGISTRY_VAL=$(grep '^REGISTRY=' policies/values/${{ matrix.cloud }}.env \
             | cut -d= -f2)
           mkdir -p /tmp/kyverno-enforce
-          for f in kyverno/verify-*.yaml; do
+          for f in policies/verify-*.yaml; do
             sed "s|REGISTRY_PLACEHOLDER|${REGISTRY_VAL}|g" "$f" \
               | sed "s/validationFailureAction: .*/validationFailureAction: Enforce/" \
               | sed "s/mutateDigest: .*/mutateDigest: true/" \
@@ -324,13 +336,10 @@ jobs:
     name: Build Size Images (${{ matrix.cloud }})
     runs-on: ubuntu-latest
     environment: ${{ matrix.cloud }}
-    needs: measure
+    needs: [setup, measure] 
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - cloud: aws
-          - cloud: azure
+      matrix: ${{ fromJson(needs.setup.outputs.matrix) }}
 
     steps:
       - name: Checkout
@@ -440,13 +449,10 @@ jobs:
     name: Measure Size Latency (${{ matrix.cloud }})
     runs-on: ubuntu-latest
     environment: ${{ matrix.cloud }}
-    needs: build-size-images
+    needs: [setup, build-size-images]
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - cloud: aws
-          - cloud: azure
+      matrix: ${{ fromJson(needs.setup.outputs.matrix) }}
 
     steps:
       - name: Checkout

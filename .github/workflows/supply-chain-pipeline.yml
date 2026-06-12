@@ -314,7 +314,7 @@ jobs:
           kubectl delete pod smoke-test -n supply-chain-demo --ignore-not-found
 
       # --- Apply Kyverno policies ------------------------------------------
-      # Policies are written once and stored in kyverno/. The registry URL
+      # Policies are written once and stored in policies/. The registry URL
       # (REGISTRY_PLACEHOLDER) is substituted at apply time from the per-cloud
       # values file. This is what makes the policies cloud-agnostic.
 
@@ -331,11 +331,11 @@ jobs:
             -n kyverno --timeout=120s
           sleep 10
 
-          REGISTRY_VAL=$(grep '^REGISTRY=' kyverno/values/${{ matrix.cloud }}.env \
+          REGISTRY_VAL=$(grep '^REGISTRY=' policies/values/${{ matrix.cloud }}.env \
             | cut -d= -f2)
 
           mkdir -p /tmp/kyverno-rendered
-          for f in kyverno/verify-*.yaml; do
+          for f in policies/verify-*.yaml; do
             sed "s|REGISTRY_PLACEHOLDER|${REGISTRY_VAL}|g" "$f" \
               > "/tmp/kyverno-rendered/$(basename $f)"
           done
