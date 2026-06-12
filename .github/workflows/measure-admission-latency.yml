@@ -201,7 +201,7 @@ jobs:
             for j in $(seq 1 20); do
               PHASE=$(kubectl get pod latency-probe \
                 -o jsonpath='{.status.phase}' 2>/dev/null || echo "Pending")
-              [ "${PHASE}" = "Succeeded" ] || [ "${PHASE}" = "Failed" ] && break
+              if [ "${PHASE}" = "Succeeded" ] || [ "${PHASE}" = "Failed" ]; then break; fi
               sleep 0.5
             done
             END=$(date +%s%3N)
@@ -246,7 +246,7 @@ jobs:
             for j in $(seq 1 20); do
               PHASE=$(kubectl get pod latency-probe \
                 -o jsonpath='{.status.phase}' 2>/dev/null || echo "Pending")
-              [ "${PHASE}" = "Succeeded" ] || [ "${PHASE}" = "Failed" ] && break
+              if [ "${PHASE}" = "Succeeded" ] || [ "${PHASE}" = "Failed" ]; then break; fi
               sleep 0.5
             done
             END=$(date +%s%3N)
@@ -290,7 +290,7 @@ jobs:
             for j in $(seq 1 20); do
               PHASE=$(kubectl get pod latency-probe \
                 -o jsonpath='{.status.phase}' 2>/dev/null || echo "Pending")
-              [ "${PHASE}" = "Succeeded" ] || [ "${PHASE}" = "Failed" ] && break
+              if [ "${PHASE}" = "Succeeded" ] || [ "${PHASE}" = "Failed" ]; then break; fi
               sleep 0.5
             done
             END=$(date +%s%3N)
@@ -533,7 +533,7 @@ jobs:
               for k in $(seq 1 20); do
                 PHASE=$(kubectl get pod size-probe \
                   -o jsonpath='{.status.phase}' 2>/dev/null || echo "Pending")
-                [ "${PHASE}" = "Succeeded" ] || [ "${PHASE}" = "Failed" ] && break
+                if [ "${PHASE}" = "Succeeded" ] || [ "${PHASE}" = "Failed" ]; then break; fi
                 sleep 0.5
               done
               END=$(date +%s%3N)
