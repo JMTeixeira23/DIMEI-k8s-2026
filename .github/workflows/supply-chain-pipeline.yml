@@ -35,32 +35,35 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - id: set-matrix
+        run: |
+          CLOUD="${{ inputs.cloud }}"
+          if [ -z "${CLOUD}" ] || [ "${CLOUD}" = "both" ]; then
+            echo 'matrix={"include":[{"cloud":"aws"},{"cloud":"azure"}]}' >> $GITHUB_OUTPUT
+          elif [ "${CLOUD}" = "aws" ]; then
+            echo 'matrix={"include":[{"cloud":"aws"}]}' >> $GITHUB_OUTPUT
+          else
+            echo 'matrix={"include":[{"cloud":"azure"}]}' >> $GITHUB_OUTPUT
+          fi
+
   supply-chain:
     name: Supply Chain (${{ matrix.cloud }})
     runs-on: ubuntu-latest
     environment: ${{ matrix.cloud }}
+    needs: setup 
 
     strategy:
       fail-fast: false   # keep the other cloud running if one fails
-      matrix:
-        include:
-          - cloud: aws
-          - cloud: azure
+      matrix: ${{ fromJson(needs.setup.outputs.matrix) }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v5
-
-      # Skip this leg if the user selected a specific cloud on manual trigger.
-      # On push, both legs always run.
-      - name: Check cloud selection
-        run: |
-          SELECTED="${{ inputs.cloud }}"
-          THIS="${{ matrix.cloud }}"
-          if [ -n "${SELECTED}" ] && [ "${SELECTED}" != "both" ] && [ "${SELECTED}" != "${THIS}" ]; then
-            echo "Skipping ${THIS} (selected: ${SELECTED})"
-            exit 0
-          fi
 
       # --- Auth (cloud-specific) -------------------------------------------
       # Both use OIDC federation — no long-lived credentials stored anywhere.
