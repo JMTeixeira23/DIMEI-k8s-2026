@@ -1,6 +1,6 @@
 name: Supply Chain Security Pipeline
 
-# Unified CD pipeline — runs on AWS EKS and Azure AKS in parallel via matrix.
+# Unified CD pipeline - runs on AWS EKS and Azure AKS in parallel via matrix.
 #
 # The only cloud-specific steps are auth, registry login, and kubeconfig.
 # Everything from signing through policy enforcement is identical on both clouds.
@@ -66,9 +66,9 @@ jobs:
         uses: actions/checkout@v5
 
       # --- Auth (cloud-specific) -------------------------------------------
-      # Both use OIDC federation — no long-lived credentials stored anywhere.
+      # Both use OIDC federation - no long-lived credentials stored anywhere.
 
-      - name: Auth — AWS
+      - name: Auth - AWS
         if: matrix.cloud == 'aws'
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -76,7 +76,7 @@ jobs:
           aws-region: ${{ secrets.AWS_REGION }}
           role-session-name: supply-chain-${{ github.run_id }}
 
-      - name: Auth — Azure
+      - name: Auth - Azure
         if: matrix.cloud == 'azure'
         uses: azure/login@v2
         with:
@@ -86,12 +86,12 @@ jobs:
 
       # --- Registry login (cloud-specific) ---------------------------------
 
-      - name: Registry login — ECR
+      - name: Registry login - ECR
         if: matrix.cloud == 'aws'
         id: ecr-login
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Registry login — ACR
+      - name: Registry login - ACR
         if: matrix.cloud == 'azure'
         run: az acr login --name "${{ secrets.ACR_LOGIN_SERVER }}"
 
@@ -138,7 +138,7 @@ jobs:
       # --- Sign (Cosign keyless) -------------------------------------------
       # Cosign exchanges the GitHub Actions OIDC token for a short-lived Fulcio
       # certificate. The cert + signature are recorded in Rekor (public log).
-      # No private keys involved — the identity is the workflow path itself.
+      # No private keys involved - the identity is the workflow path itself.
 
       - name: Install Cosign
         uses: sigstore/cosign-installer@v3
@@ -171,7 +171,7 @@ jobs:
           echo "SBOM attested"
 
       # --- SLSA Provenance -------------------------------------------------
-      # Records where and how the image was built — repo, commit, workflow,
+      # Records where and how the image was built - repo, commit, workflow,
       # run ID. Meets SLSA v1.0 Build L1. Attached as a signed attestation.
 
       - name: Generate and attest SLSA provenance
@@ -217,28 +217,28 @@ jobs:
             --certificate-oidc-issuer "${CERT_ISSUER}" \
             --type cyclonedx "${IMAGE_REF}" \
             | jq -r '.payload | @base64d | fromjson |
-                "SBOM verified — components: \(.predicate.components | length)"'
+                "SBOM verified - components: \(.predicate.components | length)"'
 
           cosign verify-attestation \
             --certificate-identity-regexp "${CERT_REGEXP}" \
             --certificate-oidc-issuer "${CERT_ISSUER}" \
             --type slsaprovenance1 "${IMAGE_REF}" \
             | jq -r '.payload | @base64d | fromjson |
-                "Provenance verified — builder: \(.predicate.runDetails.builder.id)"'
+                "Provenance verified - builder: \(.predicate.runDetails.builder.id)"'
 
           echo "--- attestation tree ---"
           cosign tree "${IMAGE_REF}"
 
       # --- Kubeconfig (cloud-specific) -------------------------------------
 
-      - name: Kubeconfig — EKS
+      - name: Kubeconfig - EKS
         if: matrix.cloud == 'aws'
         run: |
           aws eks update-kubeconfig \
             --region "${{ secrets.AWS_REGION }}" \
             --name "${{ secrets.EKS_CLUSTER_NAME }}"
 
-      - name: Kubeconfig — AKS
+      - name: Kubeconfig - AKS
         if: matrix.cloud == 'azure'
         run: |
           az aks get-credentials \
@@ -256,7 +256,7 @@ jobs:
 
       # Force Kyverno webhooks to failurePolicy=Ignore so that a brief webhook
       # unavailability does not block unrelated kubectl operations. Kyverno 3.1.4
-      # does not respect the Helm value for this — must be patched directly.
+      # does not respect the Helm value for this - must be patched directly.
       - name: Set Kyverno webhooks to failurePolicy=Ignore
         run: |
           for cfg in kyverno-policy-mutating-webhook-cfg \
@@ -357,9 +357,9 @@ jobs:
           kubectl create namespace supply-chain-demo \
             --dry-run=client -o yaml | kubectl apply -f -
 
-      - name: "TC-01 — Signed image must be ADMITTED"
+      - name: "TC-01 - Signed image must be ADMITTED"
         run: |
-          # Fetch digest directly — env var from build step may not persist here
+          # Fetch digest directly - env var from build step may not persist here
           if [ "${{ matrix.cloud }}" = "aws" ]; then
             DIGEST_REF=$(aws ecr describe-images \
               --repository-name "${REPO}" \
@@ -386,15 +386,15 @@ jobs:
             --command -- sh -c 'echo tc-01-ok' 2>&1) && ADMITTED=true || ADMITTED=false
 
           if [ "${ADMITTED}" = "true" ]; then
-            echo "TC-01 PASS — signed image admitted"
+            echo "TC-01 PASS - signed image admitted"
             kubectl delete pod tc-01 -n supply-chain-demo --ignore-not-found
           else
-            echo "TC-01 FAIL — signed image was unexpectedly blocked"
+            echo "TC-01 FAIL - signed image was unexpectedly blocked"
             echo "${OUTPUT}"
             exit 1
           fi
 
-      - name: "TC-02 — nginx must be BLOCKED (wrong registry)"
+      - name: "TC-02 - nginx must be BLOCKED (wrong registry)"
         run: |
           kubectl delete pod tc-02 -n supply-chain-demo --ignore-not-found
           sleep 2
@@ -406,14 +406,14 @@ jobs:
             --command -- sh -c 'echo tc-02' 2>&1) && ADMITTED=true || ADMITTED=false
 
           if [ "${ADMITTED}" = "false" ]; then
-            echo "TC-02 PASS — nginx blocked"
+            echo "TC-02 PASS - nginx blocked"
           else
-            echo "TC-02 FAIL — nginx was admitted"
+            echo "TC-02 FAIL - nginx was admitted"
             kubectl delete pod tc-02 -n supply-chain-demo --ignore-not-found
             exit 1
           fi
 
-      - name: "TC-03 — alpine must be BLOCKED (wrong registry)"
+      - name: "TC-03 - alpine must be BLOCKED (wrong registry)"
         run: |
           kubectl delete pod tc-03 -n supply-chain-demo --ignore-not-found
           sleep 2
@@ -425,16 +425,16 @@ jobs:
             --command -- sh -c 'echo tc-03' 2>&1) && ADMITTED=true || ADMITTED=false
 
           if [ "${ADMITTED}" = "false" ]; then
-            echo "TC-03 PASS — alpine blocked"
+            echo "TC-03 PASS - alpine blocked"
           else
-            echo "TC-03 FAIL — alpine was admitted"
+            echo "TC-03 FAIL - alpine was admitted"
             kubectl delete pod tc-03 -n supply-chain-demo --ignore-not-found
             exit 1
           fi
 
-      - name: "TC-04 — Unsigned image from approved registry must be BLOCKED"
+      - name: "TC-04 - Unsigned image from approved registry must be BLOCKED"
         run: |
-          # Build and push an image without signing — from the correct registry.
+          # Build and push an image without signing - from the correct registry.
           # Tests that registry origin alone is not sufficient for admission.
           TC04_TAG="tc04-unsigned-${{ github.run_id }}"
           TC04_IMAGE="${REGISTRY}/${REPO}:${TC04_TAG}"
@@ -452,14 +452,14 @@ jobs:
             --command -- sh -c 'echo tc-04' 2>&1) && ADMITTED=true || ADMITTED=false
 
           if [ "${ADMITTED}" = "false" ]; then
-            echo "TC-04 PASS — unsigned image from approved registry blocked"
+            echo "TC-04 PASS - unsigned image from approved registry blocked"
           else
-            echo "TC-04 FAIL — unsigned image was admitted"
+            echo "TC-04 FAIL - unsigned image was admitted"
             kubectl delete pod tc-04 -n supply-chain-demo --ignore-not-found
             exit 1
           fi
 
-      - name: "TC-05 — Policy scoping: unsigned image must be ADMITTED in default namespace"
+      - name: "TC-05 - Policy scoping: unsigned image must be ADMITTED in default namespace"
         run: |
           # Re-uses the unsigned image from TC-04 to verify that Kyverno policies
           # are scoped to supply-chain-demo only and do not block the default namespace.
@@ -476,10 +476,10 @@ jobs:
             --command -- sh -c 'echo tc-05-admitted' 2>&1) && ADMITTED=true || ADMITTED=false
 
           if [ "${ADMITTED}" = "true" ]; then
-            echo "TC-05 PASS — unsigned image admitted in default namespace (policies correctly scoped)"
+            echo "TC-05 PASS - unsigned image admitted in default namespace (policies correctly scoped)"
             kubectl delete pod tc-05-scope -n default --ignore-not-found
           else
-            echo "TC-05 FAIL — image unexpectedly blocked in default namespace"
+            echo "TC-05 FAIL - image unexpectedly blocked in default namespace"
             echo "Policies may be leaking outside supply-chain-demo scope"
             echo "${OUTPUT}"
             exit 1
@@ -489,7 +489,7 @@ jobs:
         if: always()
         run: |
           echo "========================================================"
-          echo "  Supply Chain Pipeline — ${{ matrix.cloud }}"
+          echo "  Supply Chain Pipeline - ${{ matrix.cloud }}"
           echo "========================================================"
           echo "  Image     : ${FULL_IMAGE}"
           echo "  Digest    : ${DIGEST}"

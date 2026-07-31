@@ -2,6 +2,7 @@
 # https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
 #
 # Binaries for programs and plugins
+.*de*
 *.exe
 *.exe~
 *.dll
@@ -18,6 +19,9 @@ override.tf
 override.tf.json
 *_override.tf
 *_override.tf.json
+revision.md
+memory.md
+changes.md
 
 # Test binary, built with `go test -c`
 *.test
