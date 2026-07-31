@@ -1,17 +1,24 @@
 name: Attack Simulations
 
 # ─────────────────────────────────────────────────────────────────────────────
-# GENERIC ATTACK SIMULATIONS — runs on AWS EKS, Azure AKS, or both.
+# ATTACK SIMULATIONS — runs on AWS EKS, Azure AKS, or both.
 # Not part of the CD pipeline — run manually to collect thesis evidence.
 #
-# Six attacks + one namespace scoping test map to real supply chain threat scenarios:
-#   A1 — Unsigned image        (no signature, SBOM or provenance)
-#   A2 — Wrong OIDC signer     (local key instead of GitHub Actions OIDC)
-#   A3 — Digest tampering      (image modified after signing — TOCTOU)
-#   A4 — Missing SBOM          (signed but no CycloneDX attestation)
-#   A5 — Missing provenance    (signed + SBOM but no SLSA attestation)
+# Six attack classes and one namespace-scoping control:
+#   A1    — Unsigned image from an unapproved external registry  DENY   SR-05
+#   A2    — Valid signature, wrong identity (attacker local key) DENY   SR-01
+#   A3    — Tag redirected to unsigned content after signing     DENY   SR-02
+#   A4    — Signed + provenance, CycloneDX SBOM omitted          DENY   SR-03
+#   A5    — Signed + SBOM, SLSA provenance omitted               DENY   SR-04
+#   A6    — Unsigned image in the approved registry              DENY   SR-01, SR-06
+#   TC-NS — The A6 image deployed in the default namespace       ADMIT  SR-07
 #
-# Expected result: ALL 6 attacks blocked + namespace scoping confirmed on BOTH clouds.
+# No result in this workflow is written by hand. Each scenario records what it
+# observed at admission (scripts/attack-lib.sh) and scripts/attack-summary.sh
+# builds the summary and the uploaded JSON/CSV artefact from those records
+# alone. A scenario that does not run is reported as NOT_RUN, never as passing.
+#
+# The uploaded artefact — not the console output — is the source for Table 6.3.
 # ─────────────────────────────────────────────────────────────────────────────
 
 on:
@@ -23,6 +30,14 @@ on:
         default: 'both'
         type: choice
         options: [both, aws, azure]
+      probe_namespace_mechanism:
+        description: >-
+          Diagnostic: also determine which mechanism keeps the default namespace
+          out of scope (policy match scope vs the kyverno.io/exclude label).
+          Temporarily removes and restores the label. Off for evidence runs.
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   id-token: write
@@ -32,30 +47,41 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
+  # The matrix is computed here rather than filtered inside the job: a step that
+  # exits 0 does not skip the steps after it, so the previous "check cloud
+  # selection" step ran the full attack set against both clouds regardless of
+  # what was requested.
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - id: set-matrix
+        run: |
+          CLOUD="${{ inputs.cloud }}"
+          if [ -z "${CLOUD}" ] || [ "${CLOUD}" = "both" ]; then
+            echo 'matrix={"include":[{"cloud":"aws"},{"cloud":"azure"}]}' >> $GITHUB_OUTPUT
+          else
+            echo "matrix={\"include\":[{\"cloud\":\"${CLOUD}\"}]}" >> $GITHUB_OUTPUT
+          fi
+
   attacks:
     name: Attacks (${{ matrix.cloud }})
     runs-on: ubuntu-latest
     environment: ${{ matrix.cloud }}
+    needs: setup
 
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - cloud: aws
-          - cloud: azure
+      matrix: ${{ fromJson(needs.setup.outputs.matrix) }}
+
+    env:
+      CLOUD: ${{ matrix.cloud }}
+      RESULTS_DIR: /tmp/attack-results
 
     steps:
       - name: Checkout
         uses: actions/checkout@v5
-
-      - name: Check cloud selection
-        run: |
-          SELECTED="${{ inputs.cloud }}"
-          THIS="${{ matrix.cloud }}"
-          if [ "${SELECTED}" != "both" ] && [ "${SELECTED}" != "${THIS}" ]; then
-            echo "Skipping ${THIS} — selected: ${SELECTED}"
-            exit 0
-          fi
 
       # ── Auth ──────────────────────────────────────────────────────────────
 
@@ -123,21 +149,32 @@ jobs:
             -o /usr/local/bin/cosign && chmod +x /usr/local/bin/cosign
           curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh \
             | sh -s -- -b /usr/local/bin v0.105.1
+          cosign version
+          syft version
 
-      # ── Preflight: verify Enforce mode ────────────────────────────────────
+      # ── Preflight ─────────────────────────────────────────────────────────
+      # Records the enforcement state the scenarios ran against, so the artefact
+      # carries its own evidence that the cluster was in Enforce mode.
 
-      - name: Preflight — verify policies in Enforce mode
+      - name: Preflight — record and verify enforcement state
+        id: preflight
         run: |
+          set -euo pipefail
+          source scripts/attack-lib.sh
+
           echo "════════════════════════════════════════════════════"
-          echo "  Attack Simulations [${{ matrix.cloud }}] — Preflight"
+          echo "  Attack Simulations [${CLOUD}] — Preflight"
           echo "════════════════════════════════════════════════════"
 
           FAIL=0
+          POLICIES='[]'
           for POLICY in verify-image-signature verify-sbom-cyclonedx verify-slsa-provenance; do
             ACTION=$(kubectl get clusterpolicy "${POLICY}" \
-              -o jsonpath='{.spec.validationFailureAction}' 2>/dev/null || echo "MISSING")
+              -o jsonpath='{.spec.validationFailureAction}' 2>/dev/null || true)
             READY=$(kubectl get clusterpolicy "${POLICY}" \
-              -o jsonpath='{.status.ready}' 2>/dev/null || echo "false")
+              -o jsonpath='{.status.ready}' 2>/dev/null || true)
+            ACTION="${ACTION:-MISSING}"
+            READY="${READY:-false}"
 
             if [ "${ACTION}" != "Enforce" ] || [ "${READY}" != "true" ]; then
               echo "❌ ${POLICY}: action=${ACTION} ready=${READY}"
@@ -145,267 +182,452 @@ jobs:
             else
               echo "✅ ${POLICY}: Enforce, Ready"
             fi
+
+            POLICIES=$(jq -c \
+              --arg name "${POLICY}" --arg action "${ACTION}" --arg ready "${READY}" \
+              '. + [{name: $name, validationFailureAction: $action, ready: $ready}]' \
+              <<< "${POLICIES}")
           done
 
-          [ "${FAIL}" = "1" ] && echo "ERROR: Run supply-chain pipeline first" && exit 1
+          KYVERNO_IMAGE=$(kubectl get deployment kyverno-admission-controller -n kyverno \
+            -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || true)
+          KYVERNO_REPLICAS=$(kubectl get deployment kyverno-admission-controller -n kyverno \
+            -o jsonpath='{.status.readyReplicas}' 2>/dev/null || true)
+          FAILURE_POLICIES=$(kubectl get validatingwebhookconfigurations -o json 2>/dev/null \
+            | jq -r '[.items[]
+                      | select(.metadata.name | test("kyverno"))
+                      | .webhooks[]
+                      | "\(.name)=\(.failurePolicy)"] | join(" ")' 2>/dev/null || true)
+          NS_EXCLUDE_LABEL=$(kubectl get namespace default \
+            -o jsonpath='{.metadata.labels.kyverno\.io/exclude}' 2>/dev/null || true)
+
+          jq -n \
+            --argjson policies "${POLICIES}" \
+            --arg kyverno_image     "${KYVERNO_IMAGE:-unknown}" \
+            --arg kyverno_replicas  "${KYVERNO_REPLICAS:-unknown}" \
+            --arg webhook_failure_policies "${FAILURE_POLICIES:-unknown}" \
+            --arg default_ns_exclude_label "${NS_EXCLUDE_LABEL:-none}" \
+            --arg context "$(kubectl config current-context)" \
+            '{
+               kubectl_context:          $context,
+               kyverno_image:            $kyverno_image,
+               kyverno_ready_replicas:   $kyverno_replicas,
+               webhook_failure_policies: $webhook_failure_policies,
+               default_ns_exclude_label: $default_ns_exclude_label,
+               policies:                 $policies
+             }' > "${RESULTS_DIR}/_preflight.json"
+
+          echo ""
+          echo "── Recorded enforcement state ──"
+          cat "${RESULTS_DIR}/_preflight.json"
+
+          if [ "${FAIL}" = "1" ]; then
+            echo ""
+            echo "ERROR: policies are not all Enforce+Ready — run the supply chain pipeline first."
+            exit 1
+          fi
 
           kubectl create namespace supply-chain-demo \
             --dry-run=client -o yaml | kubectl apply -f -
 
-      # ── A1: Unsigned image ────────────────────────────────────────────────
+      # ─────────────────────────────────────────────────────────────────────
+      # Scenarios.
+      #
+      # Every scenario step carries the same guard: run unless the workflow was
+      # cancelled or the preflight failed. A scenario that fails its expectation
+      # therefore fails its own step without suppressing the ones after it, and
+      # the run always produces a complete result set.
+      # ─────────────────────────────────────────────────────────────────────
 
-      - name: "A1 — Build and push UNSIGNED image"
+      # ── A1: unapproved external registry (SR-05) ──────────────────────────
+      # The attack is the origin of the image, not its content, so there is
+      # nothing to build. block-unapproved-registry is a JMESPath prefix check
+      # on the image string and is the only rule that can see this image:
+      # check-image-signature scopes imageReferences to the approved registry.
+
+      - name: "A1 — External-registry image (expect DENY)"
+        if: ${{ !cancelled() && steps.preflight.conclusion == 'success' }}
         run: |
-          TAG="attack1-unsigned-${{ github.run_id }}"
-          IMAGE="${REGISTRY}/${REPO}:${TAG}"
+          set -euo pipefail
+          source scripts/attack-lib.sh
 
-          docker build -t "${IMAGE}" - << 'DOCKERFILE'
-          FROM alpine:3.19
-          LABEL threat="A1-unsigned"
-          CMD ["sh", "-c", "echo ATTACK1"]
-          DOCKERFILE
+          IMAGE="alpine:latest"
+          echo "════════ A1 [${CLOUD}] — image from docker.io ════════"
+          echo "Image: ${IMAGE}"
 
-          docker push "${IMAGE}"
-          echo "ATTACK1_IMAGE=${IMAGE}" >> $GITHUB_ENV
-          echo "Pushed unsigned image (no cosign sign, no SBOM, no provenance)"
+          probe attack1 supply-chain-demo "${IMAGE}"
+          record_result A1 "${PROBE_OUTCOME}" "${IMAGE}" "${PROBE_MESSAGE}" \
+            "public image deployed directly; no build, no signature, outside the approved registry"
 
-      - name: "A1 — Deploy unsigned image (expect BLOCK)"
+      # ── A2: valid signature, wrong identity (SR-01) ───────────────────────
+
+      - name: "A2 — Signature from an attacker-held key (expect DENY)"
+        if: ${{ !cancelled() && steps.preflight.conclusion == 'success' }}
+        env:
+          COSIGN_PASSWORD: ""
         run: |
-          echo "════════ A1 [${{ matrix.cloud }}]: Unsigned image ════════"
-          kubectl delete pod attack1 -n supply-chain-demo --ignore-not-found
-          sleep 2
+          set -euo pipefail
+          source scripts/attack-lib.sh
 
-          OUTPUT=$(kubectl run attack1 \
-            --image="${ATTACK1_IMAGE}" \
-            --restart=Never \
-            --namespace=supply-chain-demo \
-            --command -- sh -c 'echo ATTACK1' 2>&1) && ADMITTED=true || ADMITTED=false
-
-          if [ "${ADMITTED}" = "false" ]; then
-            echo "✅ A1 PASS — unsigned image BLOCKED"
-            echo "   ${OUTPUT}" | grep "denied\|blocked\|failed" | head -3
-          else
-            echo "❌ A1 FAIL — unsigned image was admitted"
-            kubectl delete pod attack1 -n supply-chain-demo --ignore-not-found
-            exit 1
-          fi
-
-      # ── A2: Wrong OIDC signer ─────────────────────────────────────────────
-
-      - name: "A2 — Build, push and sign with LOCAL KEY (wrong identity)"
-        run: |
           TAG="attack2-wrongkey-${{ github.run_id }}"
           IMAGE="${REGISTRY}/${REPO}:${TAG}"
+          echo "════════ A2 [${CLOUD}] — wrong signing identity ════════"
 
-          docker build -t "${IMAGE}" - << 'DOCKERFILE'
+          docker build -t "${IMAGE}" - <<'DOCKERFILE'
           FROM alpine:3.19
           LABEL threat="A2-wrong-signer"
           CMD ["sh", "-c", "echo ATTACK2"]
           DOCKERFILE
 
-          docker push "${IMAGE}"
-          DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "${IMAGE}" \
-            | cut -d'@' -f2)
+          DIGEST=$(push_and_digest "${IMAGE}")
+          REF="${REGISTRY}/${REPO}@${DIGEST}"
 
-          # Sign with a local key — valid Cosign signature but wrong identity
+          # A real, verifiable Cosign signature — just not from the GitHub
+          # Actions OIDC identity the policy pins. Signed with --tlog-upload=false
+          # so the run does not depend on, or write junk into, the public log.
           cosign generate-key-pair --output-key-prefix /tmp/attacker
-          cosign sign --yes --key /tmp/attacker.key "${IMAGE}@${DIGEST}" || true
+          cosign sign --yes --key /tmp/attacker.key --tlog-upload=false "${REF}"
 
-          echo "ATTACK2_IMAGE=${IMAGE}@${DIGEST}" >> $GITHUB_ENV
-          echo "Signed with local key (not GitHub Actions OIDC)"
-
-      - name: "A2 — Deploy wrong-signer image (expect BLOCK)"
-        run: |
-          echo "════════ A2 [${{ matrix.cloud }}]: Wrong OIDC identity ════════"
-          kubectl delete pod attack2 -n supply-chain-demo --ignore-not-found
-          sleep 2
-
-          OUTPUT=$(kubectl run attack2 \
-            --image="${ATTACK2_IMAGE}" \
-            --restart=Never \
-            --namespace=supply-chain-demo \
-            --command -- sh -c 'echo ATTACK2' 2>&1) && ADMITTED=true || ADMITTED=false
-
-          if [ "${ADMITTED}" = "false" ]; then
-            echo "✅ A2 PASS — locally-signed image BLOCKED (wrong OIDC subject)"
-          else
-            echo "❌ A2 FAIL — wrong-key image was admitted"
-            kubectl delete pod attack2 -n supply-chain-demo --ignore-not-found
-            exit 1
+          # Precondition: the attacker signature must exist and verify under the
+          # attacker key. Without it this scenario silently degenerates into A6
+          # and would credit the wrong control.
+          if ! cosign verify --key /tmp/attacker.pub \
+                 --insecure-ignore-tlog=true "${REF}" >/dev/null 2>&1; then
+            abort_scenario A2 "${REF}" \
+              "attacker signature absent or unverifiable — scenario would degenerate into A6"
           fi
+          echo "Attacker signature present and valid under /tmp/attacker.pub"
 
-      # ── A3: Digest tampering ──────────────────────────────────────────────
+          probe attack2 supply-chain-demo "${REF}"
+          record_result A2 "${PROBE_OUTCOME}" "${REF}" "${PROBE_MESSAGE}" \
+            "signed with an attacker-generated key pair, not the pinned OIDC identity"
 
-      - name: "A3 — Push TAMPERED image (different content, unsigned)"
+      # ── A3: tag redirected after signing (SR-02) ──────────────────────────
+      # Builds a fully compliant artefact (signed + SBOM + provenance), then
+      # moves the tag to different, unsigned content and deploys BY TAG.
+      # Deploying by digest cannot exercise this path.
+      #
+      # Distinct from the post-admission evasion test (revision item 2.2): here
+      # the tag moves before admission, so Kyverno resolves the new digest and
+      # must deny.
+
+      - name: "A3 — Tag redirected to unsigned content after signing (expect DENY)"
+        if: ${{ !cancelled() && steps.preflight.conclusion == 'success' }}
+        env:
+          GH_REPOSITORY:  ${{ github.repository }}
+          GH_REF_NAME:    ${{ github.ref_name }}
+          GH_SHA:         ${{ github.sha }}
+          GH_EVENT:       ${{ github.event_name }}
+          GH_WORKFLOW:    ${{ github.workflow }}
+          GH_RUN_ID:      ${{ github.run_id }}
+          GH_RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
-          TAG="attack3-tampered-${{ github.run_id }}"
-          IMAGE="${REGISTRY}/${REPO}:${TAG}"
+          set -euo pipefail
+          source scripts/attack-lib.sh
 
-          # Different content = different digest = signature doesn't match
-          docker build -t "${IMAGE}" - << 'DOCKERFILE'
+          TAG="attack3-tagmove-${{ github.run_id }}"
+          TAG_REF="${REGISTRY}/${REPO}:${TAG}"
+          echo "════════ A3 [${CLOUD}] — post-signature tag redirection ════════"
+
+          # ---- v1: legitimate, fully attested ----
+          docker build -t "${TAG_REF}" - <<DOCKERFILE
           FROM alpine:3.19
-          LABEL threat="A3-tampered"
-          RUN echo "malicious_payload" > /tmp/backdoor.txt
-          CMD ["sh", "-c", "cat /tmp/backdoor.txt && echo ATTACK3"]
+          LABEL threat="A3-v1-legitimate"
+          LABEL build="v1-${{ github.run_id }}"
+          CMD ["sh", "-c", "echo ATTACK3-V1"]
           DOCKERFILE
 
-          docker push "${IMAGE}"
-          echo "ATTACK3_IMAGE=${IMAGE}" >> $GITHUB_ENV
-          echo "Pushed tampered image (different digest, no valid signature)"
+          D1=$(push_and_digest "${TAG_REF}")
+          REF1="${REGISTRY}/${REPO}@${D1}"
+          echo "v1 pushed: D1=${D1}"
 
-      - name: "A3 — Deploy tampered image (expect BLOCK)"
-        run: |
-          echo "════════ A3 [${{ matrix.cloud }}]: Digest tampering ════════"
-          kubectl delete pod attack3 -n supply-chain-demo --ignore-not-found
-          sleep 2
+          cosign sign --yes "${REF1}"
 
-          OUTPUT=$(kubectl run attack3 \
-            --image="${ATTACK3_IMAGE}" \
-            --restart=Never \
-            --namespace=supply-chain-demo \
-            --command -- sh -c 'echo ATTACK3' 2>&1) && ADMITTED=true || ADMITTED=false
+          syft "${REF1}" -o cyclonedx-json=/tmp/sbom-a3.json
+          cosign attest --yes --type cyclonedx --predicate /tmp/sbom-a3.json "${REF1}"
 
-          if [ "${ADMITTED}" = "false" ]; then
-            echo "✅ A3 PASS — tampered image BLOCKED (no matching signature)"
-          else
-            echo "❌ A3 FAIL — tampered image was admitted"
-            kubectl delete pod attack3 -n supply-chain-demo --ignore-not-found
-            exit 1
+          FULL_IMAGE="${TAG_REF}" \
+          BUILD_TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+          CLOUD="${CLOUD}" \
+          python3 scripts/gen_slsa_provenance.py
+          cosign attest --yes --type slsaprovenance1 --predicate provenance.json "${REF1}"
+
+          # Precondition: v1 must be admissible at this point, otherwise a denial
+          # after the tag move proves nothing about the tag move.
+          if ! cosign verify \
+                 --certificate-identity-regexp "https://github.com/${{ github.repository }}.*" \
+                 --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+                 "${REF1}" >/dev/null 2>&1; then
+            abort_scenario A3 "${TAG_REF}" "v1 signature did not verify — the artefact was never compliant"
+          fi
+          echo "v1 is signed, SBOM-attested and provenance-attested"
+
+          # ---- v2: different content, same tag ----
+          docker build -t "${TAG_REF}" - <<DOCKERFILE
+          FROM alpine:3.19
+          LABEL threat="A3-v2-substituted"
+          LABEL build="v2-${{ github.run_id }}"
+          RUN echo "malicious_payload-${{ github.run_id }}" > /opt/backdoor.txt
+          CMD ["sh", "-c", "cat /opt/backdoor.txt && echo ATTACK3-V2"]
+          DOCKERFILE
+
+          D2=$(push_and_digest "${TAG_REF}")
+          echo "v2 pushed: D2=${D2}"
+
+          if [ "${D1}" = "${D2}" ]; then
+            abort_scenario A3 "${TAG_REF}" "v2 produced the same digest as v1 — no substitution occurred"
           fi
 
-      # ── A4: Signed, no SBOM ───────────────────────────────────────────────
+          RESOLVED=$(resolve_tag_digest "${TAG_REF}")
+          if [ "${RESOLVED}" != "${D2}" ]; then
+            abort_scenario A3 "${TAG_REF}" \
+              "tag resolves to ${RESOLVED:-nothing}, expected ${D2} — the registry did not accept the tag move"
+          fi
+          echo "Tag ${TAG} now resolves to the unsigned D2"
 
-      - name: "A4 — Build, push and sign WITHOUT SBOM"
+          # Deploy by tag — this is the whole point of the scenario.
+          probe attack3 supply-chain-demo "${TAG_REF}"
+          record_result A3 "${PROBE_OUTCOME}" "${TAG_REF}" "${PROBE_MESSAGE}" \
+            "signed D1=${D1}; deployed by tag, which now resolves to unsigned D2=${D2}"
+
+      # ── A4: SBOM omitted (SR-03) ──────────────────────────────────────────
+      # Signature and provenance are both attested, so verify-image-signature
+      # and verify-slsa-provenance pass and the SBOM requirement is the only
+      # control that can deny. This is what makes A4 evidence for SR-03 alone.
+
+      - name: "A4 — Signed and provenance-attested, SBOM omitted (expect DENY)"
+        if: ${{ !cancelled() && steps.preflight.conclusion == 'success' }}
+        env:
+          GH_REPOSITORY:  ${{ github.repository }}
+          GH_REF_NAME:    ${{ github.ref_name }}
+          GH_SHA:         ${{ github.sha }}
+          GH_EVENT:       ${{ github.event_name }}
+          GH_WORKFLOW:    ${{ github.workflow }}
+          GH_RUN_ID:      ${{ github.run_id }}
+          GH_RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
+          set -euo pipefail
+          source scripts/attack-lib.sh
+
           TAG="attack4-nosbom-${{ github.run_id }}"
           IMAGE="${REGISTRY}/${REPO}:${TAG}"
+          echo "════════ A4 [${CLOUD}] — missing SBOM attestation ════════"
 
-          docker build -t "${IMAGE}" - << 'DOCKERFILE'
+          docker build -t "${IMAGE}" - <<'DOCKERFILE'
           FROM alpine:3.19
           LABEL threat="A4-no-sbom"
           CMD ["sh", "-c", "echo ATTACK4"]
           DOCKERFILE
 
-          docker push "${IMAGE}"
-          DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "${IMAGE}" \
-            | cut -d'@' -f2)
+          DIGEST=$(push_and_digest "${IMAGE}")
+          REF="${REGISTRY}/${REPO}@${DIGEST}"
 
-          # Sign with valid OIDC — passes verify-image-signature
-          cosign sign --yes "${IMAGE}@${DIGEST}"
+          cosign sign --yes "${REF}"
 
-          # Deliberately skip SBOM attestation
+          FULL_IMAGE="${IMAGE}" \
+          BUILD_TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+          CLOUD="${CLOUD}" \
+          python3 scripts/gen_slsa_provenance.py
+          cosign attest --yes --type slsaprovenance1 --predicate provenance.json "${REF}"
 
-          echo "ATTACK4_IMAGE=${IMAGE}@${DIGEST}" >> $GITHUB_ENV
-          echo "Signed ✅ — SBOM deliberately skipped ✗"
+          # CycloneDX SBOM attestation deliberately omitted.
+          echo "Signed ✅  Provenance ✅  SBOM omitted ✗"
 
-      - name: "A4 — Deploy signed-no-SBOM image (expect BLOCK)"
+          probe attack4 supply-chain-demo "${REF}"
+          record_result A4 "${PROBE_OUTCOME}" "${REF}" "${PROBE_MESSAGE}" \
+            "signature and SLSA provenance present; CycloneDX SBOM attestation is the only missing control"
+
+      # ── A5: provenance omitted (SR-04) ────────────────────────────────────
+
+      - name: "A5 — Signed and SBOM-attested, provenance omitted (expect DENY)"
+        if: ${{ !cancelled() && steps.preflight.conclusion == 'success' }}
         run: |
-          echo "════════ A4 [${{ matrix.cloud }}]: Missing SBOM ════════"
-          kubectl delete pod attack4 -n supply-chain-demo --ignore-not-found
-          sleep 2
+          set -euo pipefail
+          source scripts/attack-lib.sh
 
-          OUTPUT=$(kubectl run attack4 \
-            --image="${ATTACK4_IMAGE}" \
-            --restart=Never \
-            --namespace=supply-chain-demo \
-            --command -- sh -c 'echo ATTACK4' 2>&1) && ADMITTED=true || ADMITTED=false
-
-          if [ "${ADMITTED}" = "false" ]; then
-            echo "✅ A4 PASS — signed-no-SBOM image BLOCKED (verify-sbom-cyclonedx)"
-          else
-            echo "❌ A4 FAIL — image without SBOM was admitted"
-            kubectl delete pod attack4 -n supply-chain-demo --ignore-not-found
-            exit 1
-          fi
-
-      # ── A5: Signed + SBOM, no provenance ─────────────────────────────────
-
-      - name: "A5 — Build, push, sign + SBOM WITHOUT provenance"
-        run: |
           TAG="attack5-noprov-${{ github.run_id }}"
           IMAGE="${REGISTRY}/${REPO}:${TAG}"
+          echo "════════ A5 [${CLOUD}] — missing SLSA provenance ════════"
 
-          docker build -t "${IMAGE}" - << 'DOCKERFILE'
+          docker build -t "${IMAGE}" - <<'DOCKERFILE'
           FROM alpine:3.19
           LABEL threat="A5-no-provenance"
           CMD ["sh", "-c", "echo ATTACK5"]
           DOCKERFILE
 
-          docker push "${IMAGE}"
-          DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "${IMAGE}" \
-            | cut -d'@' -f2)
+          DIGEST=$(push_and_digest "${IMAGE}")
+          REF="${REGISTRY}/${REPO}@${DIGEST}"
 
-          # Sign — passes verify-image-signature
-          cosign sign --yes "${IMAGE}@${DIGEST}"
+          cosign sign --yes "${REF}"
 
-          # Attest SBOM — passes verify-sbom-cyclonedx
-          syft "${IMAGE}@${DIGEST}" -o cyclonedx-json=/tmp/sbom-a5.json
-          cosign attest --yes \
-            --type cyclonedx \
-            --predicate /tmp/sbom-a5.json \
-            "${IMAGE}@${DIGEST}"
+          syft "${REF}" -o cyclonedx-json=/tmp/sbom-a5.json
+          cosign attest --yes --type cyclonedx --predicate /tmp/sbom-a5.json "${REF}"
 
-          # Deliberately skip provenance attestation
+          # SLSA provenance attestation deliberately omitted.
+          echo "Signed ✅  SBOM ✅  Provenance omitted ✗"
 
-          echo "ATTACK5_IMAGE=${IMAGE}@${DIGEST}" >> $GITHUB_ENV
-          echo "Signed ✅ — SBOM ✅ — Provenance deliberately skipped ✗"
+          probe attack5 supply-chain-demo "${REF}"
+          record_result A5 "${PROBE_OUTCOME}" "${REF}" "${PROBE_MESSAGE}" \
+            "signature and CycloneDX SBOM present; SLSA provenance attestation is the only missing control"
 
-      - name: "A5 — Deploy signed+SBOM-no-provenance image (expect BLOCK)"
+      # ── A6: unsigned image in the approved registry (SR-01, SR-06) ────────
+      # The insider case: the adversary can push to the approved registry but
+      # cannot produce a signature from the pinned workflow identity. Registry
+      # origin alone must not be sufficient for admission.
+
+      - name: "A6 — Unsigned image in the approved registry (expect DENY)"
+        if: ${{ !cancelled() && steps.preflight.conclusion == 'success' }}
         run: |
-          echo "════════ A5 [${{ matrix.cloud }}]: Missing provenance ════════"
-          kubectl delete pod attack5 -n supply-chain-demo --ignore-not-found
-          sleep 2
+          set -euo pipefail
+          source scripts/attack-lib.sh
 
-          OUTPUT=$(kubectl run attack5 \
-            --image="${ATTACK5_IMAGE}" \
-            --restart=Never \
-            --namespace=supply-chain-demo \
-            --command -- sh -c 'echo ATTACK5' 2>&1) && ADMITTED=true || ADMITTED=false
+          TAG="attack6-unsigned-${{ github.run_id }}"
+          IMAGE="${REGISTRY}/${REPO}:${TAG}"
+          echo "════════ A6 [${CLOUD}] — unsigned, approved registry ════════"
 
-          if [ "${ADMITTED}" = "false" ]; then
-            echo "✅ A5 PASS — signed+SBOM-no-provenance image BLOCKED (verify-slsa-provenance)"
-          else
-            echo "❌ A5 FAIL — image without provenance was admitted"
-            kubectl delete pod attack5 -n supply-chain-demo --ignore-not-found
-            exit 1
+          build_unsigned_image "${IMAGE}" "A6-unsigned"
+          DIGEST=$(push_and_digest "${IMAGE}")
+          REF="${REGISTRY}/${REPO}@${DIGEST}"
+          echo "A6_IMAGE=${REF}" >> $GITHUB_ENV
+          echo "Pushed unsigned: no signature, no SBOM, no provenance"
+
+          probe attack6 supply-chain-demo "${REF}"
+          record_result A6 "${PROBE_OUTCOME}" "${REF}" "${PROBE_MESSAGE}" \
+            "pushed to the approved registry; no Cosign signature and no attestations"
+
+      # ── TC-NS: namespace scoping (SR-07) ──────────────────────────────────
+      # The same image A6 was denied must be admitted in the default namespace.
+      # Expected outcome is ADMIT, and the probe asserts the pod object actually
+      # exists rather than trusting the exit status of kubectl run.
+
+      - name: "TC-NS — A6 image in the default namespace (expect ADMIT)"
+        if: ${{ !cancelled() && steps.preflight.conclusion == 'success' }}
+        run: |
+          set -euo pipefail
+          source scripts/attack-lib.sh
+
+          echo "════════ TC-NS [${CLOUD}] — namespace scoping ════════"
+
+          IMAGE="${A6_IMAGE:-}"
+          if [ -z "${IMAGE}" ]; then
+            # A6 did not get far enough to publish its image. Stage the identical
+            # artefact here so the scoping control is still exercised, and say so.
+            echo "A6 image unavailable — staging an identical unsigned image"
+            TAG="attack6-unsigned-${{ github.run_id }}"
+            STAGED="${REGISTRY}/${REPO}:${TAG}"
+            build_unsigned_image "${STAGED}" "A6-unsigned"
+            IMAGE="${REGISTRY}/${REPO}@$(push_and_digest "${STAGED}")"
+          fi
+          echo "Image: ${IMAGE}"
+
+          probe tc-ns-probe default "${IMAGE}"
+          record_result TC-NS "${PROBE_OUTCOME}" "${IMAGE}" "${PROBE_MESSAGE}" \
+            "same artefact denied by A6 in supply-chain-demo; pod phase in default: ${PROBE_PHASE:-none}"
+
+      # ── Diagnostic (opt-in): which mechanism scopes the default namespace ──
+      # Three mechanisms could explain TC-NS: the rule's match scope, the
+      # exclude block, and the kyverno.io/exclude label on the namespace. Only
+      # the label can be varied without editing the policies, so removing it and
+      # re-probing discriminates the label from the other two. Off by default —
+      # it mutates cluster state and is not part of an evidence run.
+
+      - name: "Diagnostic — namespace scoping mechanism"
+        if: ${{ !cancelled() && inputs.probe_namespace_mechanism && steps.preflight.conclusion == 'success' }}
+        run: |
+          set -euo pipefail
+          source scripts/attack-lib.sh
+
+          echo "════════ Diagnostic [${CLOUD}] — namespace scoping mechanism ════════"
+
+          BEFORE=$(kubectl get namespace default \
+            -o jsonpath='{.metadata.labels.kyverno\.io/exclude}' 2>/dev/null || true)
+          echo "default namespace kyverno.io/exclude label: ${BEFORE:-none}"
+          # Hand the original value to the cleanup step before touching anything,
+          # so a cancellation mid-step still restores exactly what was there.
+          echo "NS_EXCLUDE_BEFORE=${BEFORE}" >> $GITHUB_ENV
+
+          IMAGE="${A6_IMAGE:-}"
+          if [ -z "${IMAGE}" ]; then
+            echo "No A6 image available — skipping the discriminating probe"
+            exit 0
           fi
 
-      # ── Summary ───────────────────────────────────────────────────────────
+          kubectl label namespace default kyverno.io/exclude- --overwrite >/dev/null 2>&1 || true
+          echo "Label removed; re-probing the default namespace"
+
+          probe ns-mechanism-probe default "${IMAGE}"
+          OUTCOME="${PROBE_OUTCOME}"
+          MESSAGE="${PROBE_MESSAGE}"
+
+          kubectl delete pod ns-mechanism-probe -n default --ignore-not-found >/dev/null 2>&1 || true
+          if [ -n "${BEFORE}" ]; then
+            kubectl label namespace default "kyverno.io/exclude=${BEFORE}" --overwrite >/dev/null
+            echo "Label restored to ${BEFORE}"
+          fi
+
+          if [ "${OUTCOME}" = "ADMIT" ]; then
+            CONCLUSION="the label is not load-bearing: the unsigned image is still admitted in default without it, so the rules' match scope is what keeps the namespace out of scope"
+          else
+            CONCLUSION="the label is load-bearing: without it the unsigned image is ${OUTCOME} in default"
+          fi
+          echo "Conclusion: ${CONCLUSION}"
+
+          jq -n \
+            --arg label_before "${BEFORE:-none}" \
+            --arg outcome_without_label "${OUTCOME}" \
+            --arg message "${MESSAGE}" \
+            --arg conclusion "${CONCLUSION}" \
+            '{label_before: $label_before,
+              outcome_without_label: $outcome_without_label,
+              message: $message,
+              conclusion: $conclusion}' > "${RESULTS_DIR}/_ns_mechanism.json"
+
+      # ── Summary and evidence artefact ─────────────────────────────────────
 
       - name: Attack simulation summary
         if: always()
         run: |
-          echo ""
-          echo "════════════════════════════════════════════════════════════════"
-          echo "  Attack Simulation Results — ${{ matrix.cloud }}"
-          echo "  Kyverno 3.1.4 + Cosign keyless + CycloneDX SBOM + SLSA"
-          echo "════════════════════════════════════════════════════════════════"
-          echo "  A1  Unsigned image                   ✅ BLOCKED"
-          echo "  A2  Wrong OIDC signer (local key)    ✅ BLOCKED"
-          echo "  A3  Digest tampering (TOCTOU)         ✅ BLOCKED"
-          echo "  A4  Missing SBOM                     ✅ BLOCKED"
-          echo "  A5  Missing SLSA provenance           ✅ BLOCKED"
-          echo "  A6  Unsigned from approved registry    ✅ BLOCKED"
-          echo "  TC-NS  Namespace scoping (default ns)  ✅ ADMITTED (correct)"
-          echo "  Result: 6/6 attacks blocked, namespace scoping confirmed"
-          echo "  Cloud: ${{ matrix.cloud }}"
-          echo "════════════════════════════════════════════════════════════════"
+          set -euo pipefail
+          bash scripts/attack-summary.sh || SUMMARY_RC=$?
 
           echo ""
-          echo "── Policy violation events ──"
-          for POLICY in verify-image-signature verify-sbom-cyclonedx verify-slsa-provenance; do
-            echo ""
-            echo "  ${POLICY}:"
-            kubectl get events -n supply-chain-demo \
-              --field-selector reason=PolicyViolation \
-              --sort-by='.lastTimestamp' \
-              -o custom-columns='TIME:.lastTimestamp,MSG:.message' \
-              2>/dev/null | grep "${POLICY}" | tail -5 || true
-          done
+          echo "── Policy violation events (supply-chain-demo) ──"
+          kubectl get events -n supply-chain-demo \
+            --field-selector reason=PolicyViolation \
+            --sort-by='.lastTimestamp' \
+            -o custom-columns='TIME:.lastTimestamp,MSG:.message' 2>/dev/null | tail -20 || true
 
-      - name: Cleanup attack pods
+          exit "${SUMMARY_RC:-0}"
+
+      - name: Upload evidence artefact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: attack-results-${{ matrix.cloud }}
+          path: |
+            attack-results-*.json
+            attack-results-*.csv
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Cleanup
         if: always()
         run: |
-          for pod in attack1 attack2 attack3 attack4 attack5 attack6 tc-ns-probe; do
-            kubectl delete pod "${pod}" -n supply-chain-demo --ignore-not-found
+          # Denied pods were never created, so most of these are no-ops. Cleanup
+          # must not add a failure of its own on top of a real one.
+          for pod in attack1 attack2 attack3 attack4 attack5 attack6; do
+            kubectl delete pod "${pod}" -n supply-chain-demo --ignore-not-found || true
           done
+          for pod in tc-ns-probe ns-mechanism-probe; do
+            kubectl delete pod "${pod}" -n default --ignore-not-found || true
+          done
+          # The diagnostic step restores this itself; this is the cancellation net.
+          if [ -n "${NS_EXCLUDE_BEFORE:-}" ]; then
+            CURRENT=$(kubectl get namespace default \
+              -o jsonpath='{.metadata.labels.kyverno\.io/exclude}' 2>/dev/null || true)
+            if [ "${CURRENT}" != "${NS_EXCLUDE_BEFORE}" ]; then
+              kubectl label namespace default \
+                "kyverno.io/exclude=${NS_EXCLUDE_BEFORE}" --overwrite || true
+              echo "Restored kyverno.io/exclude=${NS_EXCLUDE_BEFORE} on the default namespace"
+            fi
+          fi
