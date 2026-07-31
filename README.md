@@ -40,7 +40,10 @@ policies/
     azure.env                       — REGISTRY=supplychainthesis.azurecr.io
 
 scripts/
-  gen_provenance.py                 — Generates SLSA provenance predicate (used by pipeline)
+  gen_slsa_provenance.py            — Generates SLSA provenance predicate (used by pipeline)
+  attack-lib.sh                     — Scenario manifest + result recording for attack-simulations.yml
+  attack-summary.sh                 — Builds the attack evidence artefact (JSON + CSV) from those records
+  attack_table.py                   — Renders the attack results table from the artefact (run locally)
   latency_stats.py                  — Computes latency statistics (used by measure-latency.yml)
   size_latency_stats.py             — Computes size/latency statistics (used by measure-latency.yml)
   generate_charts.py                — Generates Phase 4 latency bar chart (run locally)
@@ -177,7 +180,7 @@ The only cloud-specific steps are auth, registry login, and kubeconfig. All sign
 
 ## Kyverno policies
 
-Three ClusterPolicies, written once, applied to both clusters. The registry URL (`REGISTRY_PLACEHOLDER`) is substituted by `sed` at apply time using `kyverno/values/<cloud>.env`.
+Three ClusterPolicies, written once, applied to both clusters. The registry URL (`REGISTRY_PLACEHOLDER`) is substituted by `sed` at apply time using `policies/values/<cloud>.env`.
 
 ```yaml
 # verify-image-signature.yaml — blocks wrong-registry images, requires Cosign signature
@@ -185,7 +188,7 @@ Three ClusterPolicies, written once, applied to both clusters. The registry URL 
 # verify-slsa-provenance.yaml — requires SLSA provenance (supply-chain-demo ns only)
 ```
 
-Adding a new cloud means creating one `kyverno/values/<cloud>.env` file with the registry URL. No policy files change.
+Adding a new cloud means creating one `policies/values/<cloud>.env` file with the registry URL. No policy files change.
 
 ---
 
@@ -241,17 +244,42 @@ python3 docs/generate_size_charts.py size-latency-aws.csv size-latency-azure.csv
 ```
 Actions → Attack Simulations → Run workflow
   cloud: both / aws / azure
+  probe_namespace_mechanism: false   (diagnostic only — see below)
 ```
 
-| Attack | Threat | Blocking policy |
-|--------|--------|----------------|
-| A1 | Unsigned image | verify-image-signature |
-| A2 | Wrong OIDC signer (local key) | verify-image-signature |
-| A3 | Digest tampering (TOCTOU) | verify-image-signature |
-| A4 | Missing SBOM | verify-sbom-cyclonedx |
-| A5 | Missing SLSA provenance | verify-slsa-provenance |
+Six attack classes and one namespace-scoping control. The expected admission
+outcome and the rule expected to produce it are declared in the scenario
+manifest at the top of `scripts/attack-lib.sh`:
 
-Result: **5/5 blocked on AWS and Azure**.
+| Class | Scenario | Requirement | Expected |
+|-------|----------|-------------|----------|
+| A1 | Unsigned image from an unapproved external registry (`alpine:latest`) | SR-05 | Denied by `block-unapproved-registry` |
+| A2 | Valid Cosign signature from an attacker-held key | SR-01 | Denied by `check-image-signature` |
+| A3 | Tag redirected to unsigned content after signing, deployed by tag | SR-02 | Denied by `check-image-signature` |
+| A4 | Signed and provenance-attested, SBOM omitted | SR-03 | Denied by `check-sbom-cyclonedx` |
+| A5 | Signed and SBOM-attested, provenance omitted | SR-04 | Denied by `check-slsa-provenance` |
+| A6 | Unsigned image in the approved registry | SR-01, SR-06 | Denied by `check-image-signature` |
+| TC-NS | The A6 image in the `default` namespace | SR-07 | **Admitted** — policies are scoped to `supply-chain-demo` |
+
+**Results are not published here.** Each run uploads
+`attack-results-<cloud>.json` and `.csv`, built from what each scenario observed
+at admission — including scenarios that failed or did not run. That artefact is
+the only source for the results table:
+
+```bash
+# Download both artefacts from the workflow run, then:
+python3 scripts/attack_table.py attack-results-aws.json attack-results-azure.json
+python3 scripts/attack_table.py --format markdown attack-results-*.json
+```
+
+The workflow fails if any scenario deviates from its expected outcome, and the
+job summary table is rendered from the same records. Nothing about the outcome
+of a run is written by hand anywhere in this repository.
+
+`probe_namespace_mechanism: true` additionally determines whether the
+`kyverno.io/exclude` label on the `default` namespace is load-bearing for TC-NS
+or whether the policies' `match` scope alone is doing the work. It temporarily
+removes and restores that label, so leave it off for evidence runs.
 
 ---
 
