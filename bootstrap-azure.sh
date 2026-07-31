@@ -66,8 +66,6 @@ helm upgrade --install kyverno kyverno/kyverno \
   --set backgroundController.replicas=1 \
   --set reportsController.replicas=1 \
   --set cleanupController.replicas=1 \
-  --set failurePolicy=Ignore \
-  --set forceFailurePolicyIgnore=true \
   --set webhooksCleanup.enabled=false \
   --set "admissionController.serviceAccount.annotations.azure\\.workload\\.identity/client-id=${KYVERNO_CLIENT_ID}" \
   --set-string "admissionController.podLabels.azure\\.workload\\.identity/use=true" \
@@ -77,15 +75,17 @@ helm upgrade --install kyverno kyverno/kyverno \
 
 echo "  ✅ Kyverno installed"
 
-# ── Patch admission controller to force all webhooks to Ignore ───────────────
+# ── Remove the policy webhook ────────────────────────────────────────────────
+# --forceFailurePolicyIgnore is set at install time via
+# features.forceFailurePolicyIgnore.enabled in helm/kyverno-values.yaml. It used
+# to be appended to the deployment's args with `kubectl patch` after install,
+# which gave the "kubectl-patch" field manager ownership of that field — Helm 4
+# applies server-side and refuses to overwrite another manager's field, so every
+# re-run of this script failed with a conflict on
+# .spec.template.spec.containers[kyverno].args. Setting it through the chart
+# keeps Helm the sole owner and makes the script re-runnable.
 echo ""
-echo "▶ Patching admission controller with --forceFailurePolicyIgnore..."
-kubectl patch deployment kyverno-admission-controller -n kyverno --type=json \
-  -p='[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--forceFailurePolicyIgnore=true"}]' \
-  2>/dev/null || true
-kubectl rollout status deployment/kyverno-admission-controller \
-  -n kyverno --timeout=60s
-sleep 10
+echo "▶ Removing the policy webhook..."
 # Delete the policy webhook — it targets only kyverno.io resources (not pods)
 # and Kyverno hardcodes it to Fail which blocks all kubectl operations
 kubectl delete mutatingwebhookconfiguration kyverno-policy-mutating-webhook-cfg \
@@ -122,22 +122,30 @@ for cfg in $(kubectl get validatingwebhookconfigurations   --no-headers -o name 
   echo "  ✅ Patched ${cfg}"
 done
 
-# ── Step 5: Suspend broken cleanup CronJobs ───────────────────────────────────
+# ── Step 5: Remove leftovers from the cleanup CronJobs ───────────────────────
+# The CronJobs are no longer installed — cleanupJobs.*.enabled=false in
+# helm/kyverno-values.yaml — because they run bitnami/kubectl:1.28.5, which does
+# not pull here, and their 10-minute schedule could fire before the old
+# suspend-after-install step got to them. Helm removes the CronJobs on upgrade,
+# but Jobs and Pods they already spawned are not chart-managed, so clear those.
 echo ""
-echo "▶ Suspending cleanup CronJobs..."
-for cj in kyverno-cleanup-admission-reports \
-           kyverno-cleanup-cluster-admission-reports; do
-  kubectl patch cronjob "${cj}" -n "${KYVERNO_NS}" \
-    -p '{"spec":{"suspend":true}}' 2>/dev/null && \
-    echo "  ✅ Suspended ${cj}" || \
-    echo "  ⚠️  ${cj} not found"
+echo "▶ Clearing cleanup CronJob leftovers..."
+kubectl delete cronjob -n "${KYVERNO_NS}" \
+  kyverno-cleanup-admission-reports \
+  kyverno-cleanup-cluster-admission-reports \
+  --ignore-not-found 2>/dev/null || true
+for j in $(kubectl get jobs -n "${KYVERNO_NS}" --no-headers -o name 2>/dev/null \
+             | grep "kyverno-cleanup-" || true); do
+  kubectl delete "${j}" -n "${KYVERNO_NS}" --ignore-not-found 2>/dev/null || true
+  echo "  ✅ Removed ${j}"
 done
+echo "  ✅ No cleanup CronJobs installed"
 
 # ── Step 6: Wait for admission controller ─────────────────────────────────────
 echo ""
 echo "▶ Waiting for Kyverno admission controller..."
 kubectl rollout status deployment/kyverno-admission-controller \
-  -n "${KYVERNO_NS}" --timeout=120s
+  -n "${KYVERNO_NS}" --timeout=300s
 echo "  ✅ Admission controller ready"
 kubectl get pods -n "${KYVERNO_NS}"
 

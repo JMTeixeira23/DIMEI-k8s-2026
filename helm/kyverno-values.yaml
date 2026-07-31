@@ -20,18 +20,40 @@ reportsController:
 
 cleanupController:
   replicas: 1
-  # The cleanup jobs use an image that may not exist in older Kyverno releases.
-  # bootstrap.sh suspends the CronJobs after install to avoid ImagePullBackOff.
+
+# The two admission-report cleanup CronJobs are not installed at all.
+#
+# They run `bitnami/kubectl:1.28.5` from Docker Hub every 10 minutes, which does
+# not pull on these clusters — the jobs sit in ImagePullBackOff. The bootstrap
+# scripts used to create them and suspend them afterwards, but the schedule can
+# fire inside that window, which is how stuck pods appeared on a fresh cluster.
+# Disabling them here renders no CronJobs at all, so there is nothing to race.
+#
+# Nothing in the evaluation depends on them: they delete stale admission reports,
+# and the reports controller is scaled to zero by the bootstrap anyway. Admission
+# enforcement is entirely unaffected.
+cleanupJobs:
+  admissionReports:
+    enabled: false
+  clusterAdmissionReports:
+    enabled: false
 
 # Fail-open: if Kyverno is temporarily unreachable, pods are still admitted.
 # This prevents a Kyverno outage from taking down the whole cluster.
 # In a production hardened environment, change to Fail and ensure Kyverno
 # has sufficient replicas and PodDisruptionBudgets.
-failurePolicy: Ignore
-
-# forceFailurePolicyIgnore does not work via Helm values in 3.1.4.
-# bootstrap.sh patches the admission controller deployment directly with
-# --forceFailurePolicyIgnore=true as a container arg after install.
+#
+# Kyverno generates its webhook configurations at runtime — they are not
+# rendered by the chart — so the fail-open behaviour comes from this controller
+# feature flag, which makes Kyverno write failurePolicy=Ignore into every
+# webhook it manages. Verified with:
+#   helm template kyverno kyverno/kyverno --version 3.1.4 \
+#     --set features.forceFailurePolicyIgnore.enabled=true
+# A top-level `failurePolicy` or `forceFailurePolicyIgnore` value does not
+# exist in this chart; setting either is silently ignored.
+features:
+  forceFailurePolicyIgnore:
+    enabled: true
 
 webhooksCleanup:
   enabled: false
@@ -41,8 +63,17 @@ metricsService:
   create: true
   port: 8000
 
-# Webhook timeouts — 15s gives Kyverno time to query Rekor for attestations
-# without timing out on larger images or slow network conditions.
+# Webhook timeouts — 15s is intended to give Kyverno time to query Rekor for
+# attestations without timing out on larger images or slow network conditions.
+#
+# UNVERIFIED: in chart 3.1.4 `config.webhooks` is a list of webhook *selector*
+# overrides; it is not documented to carry timeoutSeconds, and Kyverno generates
+# its webhook configurations at runtime rather than from the chart. Confirm what
+# the cluster actually has before citing 15s anywhere:
+#   kubectl get validatingwebhookconfiguration \
+#     -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.webhooks[*].timeoutSeconds}{"\n"}{end}'
+# If it reports 10, this block is not taking effect and the timeout is Kyverno's
+# default.
 config:
   webhooks:
     - name: mutating-webhook-cfg
