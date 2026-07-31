@@ -100,9 +100,11 @@ def render_latex(runs, order, label):
             f"%   {r['cloud']}: run {r['run_id']} ({r.get('run_url', 'n/a')}), "
             f"generated {r['generated']}, kyverno {r.get('kyverno_image', 'unknown')}"
         )
+    CLUSTER_NAMES = {"aws": "AWS EKS", "azure": "Azure AKS"}
+    where = " and ".join(CLUSTER_NAMES.get(c, c) for c in clouds)
     out.append("\\begin{table}[htbp]")
     out.append("  \\centering")
-    out.append("  \\caption{Attack simulation outcomes on both clusters. Every row is "
+    out.append(f"  \\caption{{Attack simulation outcomes on {where}. Every row is "
                "rendered from the evidence artefact uploaded by the attack simulation "
                "workflow run cited above.}")
     out.append(f"  \\label{{{label}}}")
@@ -110,7 +112,8 @@ def render_latex(runs, order, label):
     out.append(f"  \\begin{{tabularx}}{{\\textwidth}}{{{cols}}}")
     out.append("    \\toprule")
     header = ["\\textbf{Class}", "\\textbf{Scenario}", "\\textbf{Requirements}",
-              "\\textbf{Expected}"] + [f"\\textbf{{{c.upper()}}}" for c in clouds]
+              "\\textbf{Expected}"] + [
+                  f"\\textbf{{{CLUSTER_NAMES.get(c, c.upper())}}}" for c in clouds]
     out.append("    " + " & ".join(header) + " \\\\")
     out.append("    \\midrule")
 
