@@ -55,7 +55,11 @@ jobs:
     name: Supply Chain (${{ matrix.cloud }})
     runs-on: ubuntu-latest
     environment: ${{ matrix.cloud }}
-    needs: setup 
+    needs: setup
+
+    env:
+      CLOUD: ${{ matrix.cloud }}
+      RESULTS_DIR: /tmp/testcase-results
 
     strategy:
       fail-fast: false   # keep the other cloud running if one fails
@@ -347,20 +351,93 @@ jobs:
           kubectl get clusterpolicies -o wide
 
       # --- Admission tests -------------------------------------------------
-      # Three test cases validate that the policies work correctly:
-      #   TC-01: our signed image must be admitted
-      #   TC-02: image from wrong registry (nginx) must be blocked
-      #   TC-03: image from wrong registry (alpine) must be blocked
+      # TC-01 … TC-05 — the source of Table 6.2.
+      #
+      # Every case records what it actually observed at admission into
+      # ${RESULTS_DIR}/<id>.json via scripts/testcase-lib.sh, and the artefact
+      # built at the end is assembled from those records. This replaces a
+      # hardcoded `echo` block that printed the same five verdicts under
+      # `if: always()` regardless of what the cluster did — so the summary
+      # agreed with the workflow's intentions rather than with its results.
+      #
+      # Cases are not chained on each other's success: each runs unless the job
+      # was cancelled, so one failure produces four more observations instead of
+      # four blanks. The gate is the artefact step, which fails unless every
+      # case in the manifest matched its expected outcome.
 
       - name: Create supply-chain-demo namespace
         run: |
           kubectl create namespace supply-chain-demo \
             --dry-run=client -o yaml | kubectl apply -f -
 
-      - name: "TC-01 - Signed image must be ADMITTED"
+      # The enforcement state is recorded before any case runs. Without it the
+      # results are uninterpretable: "denied" means nothing if the policies were
+      # in Audit, and "admitted" means nothing if they were absent.
+      - name: Preflight — record the enforcement state
+        id: preflight
         run: |
-          # Fetch digest directly - env var from build step may not persist here
-          if [ "${{ matrix.cloud }}" = "aws" ]; then
+          set -euo pipefail
+          mkdir -p "${RESULTS_DIR}"
+          POLICIES="verify-image-signature verify-sbom-cyclonedx verify-slsa-provenance"
+
+          # A ClusterPolicy is not ready the instant it is applied — Kyverno has
+          # to register its webhooks first. Waiting here rather than asserting
+          # immediately is the difference between a flaky suite and one whose
+          # failures mean something.
+          for _ in $(seq 1 45); do
+            OK=1
+            for P in ${POLICIES}; do
+              [ "$(kubectl get clusterpolicy "$P" \
+                    -o jsonpath='{.status.ready}' 2>/dev/null || true)" = "true" ] || OK=0
+            done
+            [ "${OK}" = "1" ] && break
+            sleep 2
+          done
+
+          FAIL=0
+          POLICY_STATE="{}"
+          for P in ${POLICIES}; do
+            ACTION=$(kubectl get clusterpolicy "$P" \
+              -o jsonpath='{.spec.validationFailureAction}' 2>/dev/null || true)
+            READY=$(kubectl get clusterpolicy "$P" \
+              -o jsonpath='{.status.ready}' 2>/dev/null || true)
+            echo "  ${P}: ${ACTION:-MISSING} ready=${READY:-unknown}"
+            [ "${ACTION:-MISSING}" = "Enforce" ] && [ "${READY:-}" = "true" ] || FAIL=1
+            POLICY_STATE=$(jq -n \
+              --argjson acc "${POLICY_STATE}" --arg p "$P" \
+              --arg a "${ACTION:-MISSING}" --arg r "${READY:-unknown}" \
+              '$acc + {($p): {validationFailureAction: $a, ready: $r}}')
+          done
+
+          jq -n \
+            --arg context "$(kubectl config current-context 2>/dev/null || echo unknown)" \
+            --arg kyverno_image "$(kubectl get deployment kyverno-admission-controller \
+              -n kyverno -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || echo unknown)" \
+            --arg replicas "$(kubectl get deployment kyverno-admission-controller \
+              -n kyverno -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo unknown)" \
+            --arg default_ns_label "$(kubectl get namespace default \
+              -o jsonpath='{.metadata.labels.kyverno\.io/exclude}' 2>/dev/null || echo '')" \
+            --argjson policies "${POLICY_STATE}" \
+            '{kubectl_context: $context, kyverno_image: $kyverno_image,
+              kyverno_ready_replicas: $replicas,
+              default_namespace_exclude_label: $default_ns_label,
+              policies: $policies}' \
+            > "${RESULTS_DIR}/_preflight.json"
+
+          if [ "${FAIL}" = "1" ]; then
+            echo "ERROR: the admission tests require all three policies present, ready and in Enforce."
+            exit 1
+          fi
+
+      - name: "TC-01 — compliant pipeline image must be ADMITTED"
+        if: ${{ !cancelled() && steps.preflight.conclusion == 'success' }}
+        run: |
+          set -euo pipefail
+          source scripts/testcase-lib.sh
+
+          # Resolved from the registry rather than carried in an env var: the
+          # registry's view is the one Kyverno resolves at admission.
+          if [ "${CLOUD}" = "aws" ]; then
             DIGEST_REF=$(aws ecr describe-images \
               --repository-name "${REPO}" \
               --region "${{ secrets.AWS_REGION }}" \
@@ -374,133 +451,97 @@ jobs:
               --query digest --output tsv)
             DIGEST_REF="${REGISTRY}/${REPO}@${_DIG}"
           fi
-          echo "TC-01 image: ${DIGEST_REF}"
 
-          kubectl delete pod tc-01 -n supply-chain-demo --ignore-not-found
-          sleep 2
+          probe tc-01 supply-chain-demo "${DIGEST_REF}"
+          record_result TC-01 "${PROBE_OUTCOME}" "${DIGEST_REF}" "${PROBE_MESSAGE}" \
+            "signed, SBOM-attested and provenance-attested by this run; pod phase ${PROBE_PHASE:-n/a}"
 
-          OUTPUT=$(kubectl run tc-01 \
-            --image="${DIGEST_REF}" \
-            --restart=Never \
-            --namespace=supply-chain-demo \
-            --command -- sh -c 'echo tc-01-ok' 2>&1) && ADMITTED=true || ADMITTED=false
-
-          if [ "${ADMITTED}" = "true" ]; then
-            echo "TC-01 PASS - signed image admitted"
-            kubectl delete pod tc-01 -n supply-chain-demo --ignore-not-found
-          else
-            echo "TC-01 FAIL - signed image was unexpectedly blocked"
-            echo "${OUTPUT}"
-            exit 1
-          fi
-
-      - name: "TC-02 - nginx must be BLOCKED (wrong registry)"
+      - name: "TC-02 — nginx from docker.io must be DENIED"
+        if: ${{ !cancelled() && steps.preflight.conclusion == 'success' }}
         run: |
-          kubectl delete pod tc-02 -n supply-chain-demo --ignore-not-found
-          sleep 2
+          set -euo pipefail
+          source scripts/testcase-lib.sh
 
-          OUTPUT=$(kubectl run tc-02 \
-            --image=nginx:latest \
-            --restart=Never \
-            --namespace=supply-chain-demo \
-            --command -- sh -c 'echo tc-02' 2>&1) && ADMITTED=true || ADMITTED=false
+          probe tc-02 supply-chain-demo "nginx:latest"
+          record_result TC-02 "${PROBE_OUTCOME}" "nginx:latest" "${PROBE_MESSAGE}" \
+            "public image, unapproved registry"
 
-          if [ "${ADMITTED}" = "false" ]; then
-            echo "TC-02 PASS - nginx blocked"
-          else
-            echo "TC-02 FAIL - nginx was admitted"
-            kubectl delete pod tc-02 -n supply-chain-demo --ignore-not-found
-            exit 1
-          fi
-
-      - name: "TC-03 - alpine must be BLOCKED (wrong registry)"
+      - name: "TC-03 — alpine from docker.io must be DENIED"
+        if: ${{ !cancelled() && steps.preflight.conclusion == 'success' }}
         run: |
-          kubectl delete pod tc-03 -n supply-chain-demo --ignore-not-found
-          sleep 2
+          set -euo pipefail
+          source scripts/testcase-lib.sh
 
-          OUTPUT=$(kubectl run tc-03 \
-            --image=alpine:latest \
-            --restart=Never \
-            --namespace=supply-chain-demo \
-            --command -- sh -c 'echo tc-03' 2>&1) && ADMITTED=true || ADMITTED=false
+          probe tc-03 supply-chain-demo "alpine:latest"
+          record_result TC-03 "${PROBE_OUTCOME}" "alpine:latest" "${PROBE_MESSAGE}" \
+            "public image, unapproved registry"
 
-          if [ "${ADMITTED}" = "false" ]; then
-            echo "TC-03 PASS - alpine blocked"
-          else
-            echo "TC-03 FAIL - alpine was admitted"
-            kubectl delete pod tc-03 -n supply-chain-demo --ignore-not-found
-            exit 1
-          fi
-
-      - name: "TC-04 - Unsigned image from approved registry must be BLOCKED"
+      - name: "TC-04 — unsigned image in the approved registry must be DENIED"
+        if: ${{ !cancelled() && steps.preflight.conclusion == 'success' }}
         run: |
-          # Build and push an image without signing - from the correct registry.
-          # Tests that registry origin alone is not sufficient for admission.
+          set -euo pipefail
+          source scripts/testcase-lib.sh
+
+          # Approved registry, no signature: proves registry origin alone is not
+          # sufficient for admission.
           TC04_TAG="tc04-unsigned-${{ github.run_id }}"
           TC04_IMAGE="${REGISTRY}/${REPO}:${TC04_TAG}"
 
           docker build --tag "${TC04_IMAGE}" docker/hello-world
-          docker push "${TC04_IMAGE}"
-
-          kubectl delete pod tc-04 -n supply-chain-demo --ignore-not-found
-          sleep 2
-
-          OUTPUT=$(kubectl run tc-04 \
-            --image="${TC04_IMAGE}" \
-            --restart=Never \
-            --namespace=supply-chain-demo \
-            --command -- sh -c 'echo tc-04' 2>&1) && ADMITTED=true || ADMITTED=false
-
-          if [ "${ADMITTED}" = "false" ]; then
-            echo "TC-04 PASS - unsigned image from approved registry blocked"
-          else
-            echo "TC-04 FAIL - unsigned image was admitted"
-            kubectl delete pod tc-04 -n supply-chain-demo --ignore-not-found
-            exit 1
+          if ! DIGEST=$(push_and_digest "${TC04_IMAGE}"); then
+            abort_scenario TC-04 "${TC04_IMAGE}" "could not push the unsigned image"
           fi
+          TC04_REF="${REGISTRY}/${REPO}@${DIGEST}"
+          echo "${TC04_REF}" > /tmp/tc04-ref.txt
 
-      - name: "TC-05 - Policy scoping: unsigned image must be ADMITTED in default namespace"
+          # Deployed by digest so the case cannot be satisfied by a tag that
+          # happens to resolve elsewhere.
+          probe tc-04 supply-chain-demo "${TC04_REF}"
+          record_result TC-04 "${PROBE_OUTCOME}" "${TC04_REF}" "${PROBE_MESSAGE}" \
+            "pushed to the approved registry without signing"
+
+      - name: "TC-05 — the same unsigned image must be ADMITTED in default"
+        if: ${{ !cancelled() && steps.preflight.conclusion == 'success' }}
         run: |
-          # Re-uses the unsigned image from TC-04 to verify that Kyverno policies
-          # are scoped to supply-chain-demo only and do not block the default namespace.
-          TC04_TAG="tc04-unsigned-${{ github.run_id }}"
-          TC04_IMAGE="${REGISTRY}/${REPO}:${TC04_TAG}"
+          set -euo pipefail
+          source scripts/testcase-lib.sh
 
-          kubectl delete pod tc-05-scope -n default --ignore-not-found
-          sleep 2
-
-          OUTPUT=$(kubectl run tc-05-scope \
-            --image="${TC04_IMAGE}" \
-            --restart=Never \
-            --namespace=default \
-            --command -- sh -c 'echo tc-05-admitted' 2>&1) && ADMITTED=true || ADMITTED=false
-
-          if [ "${ADMITTED}" = "true" ]; then
-            echo "TC-05 PASS - unsigned image admitted in default namespace (policies correctly scoped)"
-            kubectl delete pod tc-05-scope -n default --ignore-not-found
-          else
-            echo "TC-05 FAIL - image unexpectedly blocked in default namespace"
-            echo "Policies may be leaking outside supply-chain-demo scope"
-            echo "${OUTPUT}"
-            exit 1
+          # Re-uses TC-04's exact image reference, so the only variable between
+          # the two cases is the namespace. Reading it from the file TC-04 wrote
+          # rather than rebuilding the reference is what makes that guarantee
+          # hold: a rebuild could produce a different digest.
+          if [ ! -f /tmp/tc04-ref.txt ]; then
+            abort_scenario TC-05 "n/a" "TC-04 did not publish an image reference"
           fi
+          TC04_REF="$(cat /tmp/tc04-ref.txt)"
 
-      - name: Summary
+          probe tc-05-scope default "${TC04_REF}"
+          record_result TC-05 "${PROBE_OUTCOME}" "${TC04_REF}" "${PROBE_MESSAGE}" \
+            "identical image to TC-04; only the namespace differs; pod phase ${PROBE_PHASE:-n/a}"
+
+      # --- Evidence ----------------------------------------------------------
+
+      - name: Build the admission-test artefact
         if: always()
         run: |
-          echo "========================================================"
-          echo "  Supply Chain Pipeline - ${{ matrix.cloud }}"
-          echo "========================================================"
-          echo "  Image     : ${FULL_IMAGE}"
-          echo "  Digest    : ${DIGEST}"
-          echo "  Signed    : Cosign keyless (Sigstore/Fulcio/Rekor)"
-          echo "  SBOM      : CycloneDX via Syft"
-          echo "  Provenance: SLSA v1.0"
-          echo "  Policies  : Enforce (verify-image-signature,"
-          echo "              verify-sbom-cyclonedx, verify-slsa-provenance)"
-          echo "  TC-01     : signed image admitted"
-          echo "  TC-02     : nginx blocked"
-          echo "  TC-03     : alpine blocked"
-          echo "  TC-04     : unsigned from approved registry blocked"
-          echo "  TC-05     : namespace scoping confirmed (default ns admitted)"
-          echo "========================================================"
+          CLOUD="${CLOUD}" RESULTS_DIR="${RESULTS_DIR}" \
+            bash scripts/testcase-summary.sh
+
+      - name: Upload the admission-test artefact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: testcase-results-${{ matrix.cloud }}
+          path: |
+            testcase-results-*.json
+            testcase-results-*.csv
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Cleanup probe pods
+        if: always()
+        run: |
+          kubectl delete pod tc-01 tc-02 tc-03 tc-04 \
+            -n supply-chain-demo --ignore-not-found --wait=false 2>/dev/null || true
+          kubectl delete pod tc-05-scope \
+            -n default --ignore-not-found --wait=false 2>/dev/null || true

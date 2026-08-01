@@ -1,23 +1,53 @@
 #!/usr/bin/env python3
 """
-Renders the attack-simulation results table (Table 6.3) directly from the
-evidence artefacts produced by .github/workflows/attack-simulations.yml.
+Renders an admission-results table directly from the evidence artefacts the
+workflows upload. Two tables in the dissertation come from here:
 
-The point of this script is that no number in the dissertation's attack results
-is ever typed by hand: download the artefacts from the workflow run and render.
-If a scenario did not run, it appears in the table as such.
+    Table 6.3  attack simulations   .github/workflows/attack-simulations.yml
+    Table 6.2  pipeline test cases  .github/workflows/supply-chain-pipeline.yml
+
+Both suites emit the same record schema, so one renderer serves both — the
+alternative was a second copy of this file that would drift from the first.
+
+The point of the script is that no result in the dissertation is ever typed by
+hand: download the artefacts from the workflow run and render. If a case did not
+run, it appears in the table as such rather than silently vanishing.
 
 Usage:
     python3 scripts/attack_table.py attack-results-aws.json attack-results-azure.json
     python3 scripts/attack_table.py --format markdown attack-results-*.json
+    python3 scripts/attack_table.py --preset testcases testcase-results-aws.json
 
 Options:
     --format latex|markdown   output format (default: latex)
-    --label <str>             LaTeX label (default: tab:attacks)
+    --preset attacks|testcases  caption, label and row noun (default: attacks)
+    --label <str>             LaTeX label, overriding the preset
+    --caption <str>           caption text, overriding the preset
 """
 import argparse
 import json
 import sys
+
+PRESETS = {
+    "attacks": {
+        "label":   "tab:attacks",
+        "caption": "Attack simulation outcomes on {where}. Every row is "
+                   "rendered from the evidence artefact uploaded by the attack "
+                   "simulation workflow run cited above.",
+        "noun":    "scenarios",
+        "column":  "Scenario",
+        "idcol":   "Class",
+    },
+    "testcases": {
+        "label":   "tab:testcases",
+        "caption": "Pipeline admission test outcomes on {where}. Every row is "
+                   "rendered from the evidence artefact uploaded by the supply "
+                   "chain pipeline run cited above.",
+        "noun":    "test cases",
+        "column":  "Test case",
+        "idcol":   "ID",
+    },
+}
 
 OBSERVED_LABEL = {
     "DENY":    "Denied",
@@ -33,7 +63,7 @@ def load(paths):
         with open(path) as fh:
             doc = json.load(fh)
         if "scenarios" not in doc or "run" not in doc:
-            sys.exit(f"{path}: not an attack-simulation artefact")
+            sys.exit(f"{path}: not an admission-results artefact")
         runs.append(doc)
     if not runs:
         sys.exit("no artefacts given")
@@ -42,9 +72,9 @@ def load(paths):
     for doc in runs[1:]:
         if [s["scenario"] for s in doc["scenarios"]] != order:
             sys.exit(
-                "artefacts cover different scenario sets — they come from "
-                "different versions of the workflow and must not be combined "
-                "into one table"
+                "artefacts cover different case sets — they come from "
+                "different versions of the workflow, or from different suites, "
+                "and must not be combined into one table"
             )
     return runs, order
 
@@ -86,7 +116,7 @@ def totals(doc):
     return counted
 
 
-def render_latex(runs, order, label):
+def render_latex(runs, order, preset):
     clouds = [doc["run"]["cloud"] for doc in runs]
     by_cloud = {doc["run"]["cloud"]: {s["scenario"]: s for s in doc["scenarios"]} for doc in runs}
     first = {s["scenario"]: s for s in runs[0]["scenarios"]}
@@ -104,15 +134,13 @@ def render_latex(runs, order, label):
     where = " and ".join(CLUSTER_NAMES.get(c, c) for c in clouds)
     out.append("\\begin{table}[htbp]")
     out.append("  \\centering")
-    out.append(f"  \\caption{{Attack simulation outcomes on {where}. Every row is "
-               "rendered from the evidence artefact uploaded by the attack simulation "
-               "workflow run cited above.}")
-    out.append(f"  \\label{{{label}}}")
+    out.append("  \\caption{" + preset["caption"].format(where=where) + "}")
+    out.append(f"  \\label{{{preset['label']}}}")
     cols = " ".join(["p{1.4cm}"] + ["X"] + ["p{1.8cm}"] * (1 + 1 + len(clouds)))
     out.append(f"  \\begin{{tabularx}}{{\\textwidth}}{{{cols}}}")
     out.append("    \\toprule")
-    header = ["\\textbf{Class}", "\\textbf{Scenario}", "\\textbf{Requirements}",
-              "\\textbf{Expected}"] + [
+    header = [f"\\textbf{{{preset['idcol']}}}", f"\\textbf{{{preset['column']}}}",
+              "\\textbf{Requirements}", "\\textbf{Expected}"] + [
                   f"\\textbf{{{CLUSTER_NAMES.get(c, c.upper())}}}" for c in clouds]
     out.append("    " + " & ".join(header) + " \\\\")
     out.append("    \\midrule")
@@ -134,18 +162,19 @@ def render_latex(runs, order, label):
     for doc in runs:
         t = totals(doc)
         out.append(
-            f"% {doc['run']['cloud']}: {t['pass']}/{t['total']} scenarios matched the "
+            f"% {doc['run']['cloud']}: {t['pass']}/{t['total']} {preset['noun']} matched the "
             f"expected admission outcome ({t['fail']} unexpected, {t['error']} not run or errored)"
         )
     return "\n".join(out)
 
 
-def render_markdown(runs, order):
+def render_markdown(runs, order, preset):
     clouds = [doc["run"]["cloud"] for doc in runs]
     by_cloud = {doc["run"]["cloud"]: {s["scenario"]: s for s in doc["scenarios"]} for doc in runs}
     first = {s["scenario"]: s for s in runs[0]["scenarios"]}
 
-    out = ["| Class | Scenario | Requirements | Expected | " + " | ".join(c.upper() for c in clouds) + " |"]
+    out = [f"| {preset['idcol']} | {preset['column']} | Requirements | Expected | "
+           + " | ".join(c.upper() for c in clouds) + " |"]
     out.append("|" + "---|" * (4 + len(clouds)))
     for sid in order:
         meta = first[sid]
@@ -167,15 +196,23 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("artefacts", nargs="+")
     ap.add_argument("--format", choices=["latex", "markdown"], default="latex")
-    ap.add_argument("--label", default="tab:attacks")
+    ap.add_argument("--preset", choices=sorted(PRESETS), default="attacks")
+    ap.add_argument("--label")
+    ap.add_argument("--caption")
     args = ap.parse_args()
+
+    preset = dict(PRESETS[args.preset])
+    if args.label:
+        preset["label"] = args.label
+    if args.caption:
+        preset["caption"] = args.caption
 
     runs, order = load(args.artefacts)
     runs.sort(key=lambda d: d["run"]["cloud"])
     if args.format == "latex":
-        print(render_latex(runs, order, args.label))
+        print(render_latex(runs, order, preset))
     else:
-        print(render_markdown(runs, order))
+        print(render_markdown(runs, order, preset))
 
 
 if __name__ == "__main__":
