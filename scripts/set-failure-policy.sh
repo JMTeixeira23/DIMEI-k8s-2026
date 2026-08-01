@@ -110,6 +110,27 @@ echo "  Admission failure policy → ${WANT}  (${MODE})"
 echo "  forceFailurePolicyIgnore.enabled = ${FORCE_IGNORE}"
 echo "════════════════════════════════════════════════════════════"
 
+# ── Can we reach the cluster at all? ─────────────────────────────────────────
+# Everything below reads state back from the API server, and every query here is
+# written to tolerate failure so that a missing webhook reads as "absent". That
+# makes an unreachable cluster indistinguishable from a correctly-empty one
+# unless it is checked separately, which is what this does. Without it the
+# script printed `before: <none>` and exited silently under `set -euo pipefail`
+# — observed on 2026-08-01, and exactly the class of mute failure this
+# repository keeps removing.
+if ! kubectl get --raw /readyz >/dev/null 2>&1; then
+  REASON=$(kubectl get --raw /readyz 2>&1 | head -3 || true)
+  echo ""
+  echo "ERROR: cannot reach the Kubernetes API server, so the admission failure"
+  echo "policy can neither be changed nor verified."
+  printf '  %s\n' "${REASON:-<kubectl produced no output>}"
+  echo ""
+  echo "Context: $(kubectl config current-context 2>/dev/null || echo unknown)"
+  echo "Refresh credentials (for EKS: aws eks update-kubeconfig --name <cluster>"
+  echo "--region <region>) and re-run. **Nothing has been changed.**"
+  exit 4
+fi
+
 BEFORE="$(policy_webhooks)"
 echo "  before: ${BEFORE:-<none>}"
 
@@ -129,7 +150,11 @@ echo "  before: ${BEFORE:-<none>}"
 # a reason the operator can act on, and it should fail here rather than after the
 # upgrade.
 if [ -z "${BEFORE}" ]; then
-  POLICY_COUNT=$(kubectl get clusterpolicies -o name 2>/dev/null | wc -l | tr -d ' ')
+  # `|| POLICY_COUNT=0` rather than a bare assignment: under `set -o pipefail` a
+  # failing kubectl makes the whole pipeline non-zero, and `set -e` would then
+  # kill the script here without printing anything at all.
+  POLICY_COUNT=$(kubectl get clusterpolicies -o name 2>/dev/null | wc -l | tr -d ' ') \
+    || POLICY_COUNT=0
   if [ "${POLICY_COUNT}" = "0" ]; then
     echo ""
     echo "ERROR: no ClusterPolicies are registered, so Kyverno has published no"
@@ -219,8 +244,10 @@ record "${OBSERVED}" "${OK}" "helm-upgrade"
 if [ "${OK}" != "1" ]; then
   echo ""
   if [ -z "${OBSERVED}" ]; then
+    AFTER_COUNT=$(kubectl get clusterpolicies -o name 2>/dev/null | wc -l | tr -d ' ') \
+      || AFTER_COUNT=unknown
     echo "ERROR: Kyverno published no resource webhooks after the upgrade."
-    echo "ClusterPolicies present: $(kubectl get clusterpolicies -o name 2>/dev/null | wc -l | tr -d ' ')"
+    echo "ClusterPolicies present: ${AFTER_COUNT}"
     echo "This is not a disagreement about the failure policy — there is nothing"
     echo "to disagree. Check that the policies are applied and that the admission"
     echo "controller is running."

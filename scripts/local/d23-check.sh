@@ -18,6 +18,7 @@ make_kubectl() {  # <webhooks-json> <clusterpolicy-names>
   cat > "${SHIM}/kubectl" <<EOF
 #!/usr/bin/env bash
 case "\$*" in
+  *readyz*) echo ok ;;
   *validatingwebhookconfigurations*) cat <<'JSON'
 $1
 JSON
@@ -27,6 +28,17 @@ JSON
   *deployment*) echo 3 ;;
   *) echo "" ;;
 esac
+EOF
+  chmod +x "${SHIM}/kubectl"
+}
+
+# A kubectl that cannot reach the cluster: every call fails, as it does with
+# expired credentials. This is the case that exited silently on 2026-08-01.
+make_broken_kubectl() {
+  cat > "${SHIM}/kubectl" <<'EOF'
+#!/usr/bin/env bash
+echo "error: You must be logged in to the server (Unauthorized)" >&2
+exit 1
 EOF
   chmod +x "${SHIM}/kubectl"
 }
@@ -56,6 +68,19 @@ FAILED=0
 run_case "no policies, no webhooks -> exit 3" "${EMPTY}" "" fail 3 || FAILED=1
 run_case "already Ignore -> no-op"            "${IGNORE}" "verify-image-signature" ignore 0 || FAILED=1
 run_case "already Fail -> no-op"              "${FAIL}"   "verify-image-signature" fail 0 || FAILED=1
+
+# Unreachable cluster: must exit 4 with an explanation, never die silently.
+make_broken_kubectl
+OUT=$(cd "${HERE}/.." && PATH="${SHIM}:${PATH}" RESULTS_DIR="${SHIM}/res" \
+      SETTLE_SECONDS=0 bash scripts/set-failure-policy.sh ignore 2>&1); RC=$?
+if [ "${RC}" = "4" ] && printf '%s' "${OUT}" | grep -q 'cannot reach the Kubernetes API server'; then
+  echo "PASS  unreachable cluster -> exit 4 with a reason"
+  printf '%s\n' "${OUT}" | grep -E 'ERROR|Unauthorized' | sed 's/^/      /'
+else
+  echo "FAIL  unreachable cluster: expected exit 4 and an explanation, got ${RC}"
+  printf '%s\n' "${OUT}" | sed 's/^/      /'
+  FAILED=1
+fi
 
 echo ""
 echo "── webhook-state.sh classification ──"
