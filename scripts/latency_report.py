@@ -165,6 +165,14 @@ def main():
         with open(env_path) as fh:
             environment = json.load(fh)
 
+    # The execution order and its seed, when the matrix runner recorded them.
+    # Carried into the artefact so a run can be repeated exactly and so the
+    # order can be cited when discussing per-condition tails.
+    order_path = os.path.join(args.results_dir, "_order.json")
+    if os.path.exists(order_path):
+        with open(order_path) as fh:
+            environment["execution"] = json.load(fh)
+
     requests, rejected, sent = read_requests(
         os.path.join(args.results_dir, "requests.csv"))
 

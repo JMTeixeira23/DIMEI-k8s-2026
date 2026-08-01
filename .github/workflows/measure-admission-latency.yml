@@ -11,10 +11,10 @@ name: Measure Admission Latency
 #   audit     — the same policies, validationFailureAction: Audit
 #   enforce   — the same policies, validationFailureAction: Enforce
 #
-# Optionally a fourth, if this Kyverno version supports it:
-#   enforce-nocache — enforce with the image verification cache disabled, which
-#                     isolates the Rekor round trip. Support is detected at run
-#                     time and recorded either way; nothing is assumed.
+# The conditions run in a randomised order, each preceded by a wait for the
+# cluster to reach the requested state and a settle period, so that no single
+# condition systematically absorbs the webhook re-registration that follows a
+# policy change.
 #
 # Everything else — mutateDigest, verifyDigest, attestors, the image under test —
 # is held constant, and matches what the pipeline actually deploys.
@@ -54,14 +54,13 @@ on:
         description: 'Requests per image size — size experiment (default: 20)'
         required: false
         default: '20'
-      measure_cold_cache:
-        description: >-
-          Also measure with the image verification cache disabled, to isolate the
-          Rekor round trip. Skipped automatically if this Kyverno version has no
-          such flag. Patches the admission deployment and reverts it afterwards.
-        required: false
-        default: false
-        type: boolean
+      # There is deliberately no cold-cache input. Kyverno v1.11.4 has no image
+      # verification cache — confirmed from the running container's arguments,
+      # and chart 3.1.4 exposes no such value — so there is no warm/cold split to
+      # isolate. Every admission pays the full verification path including the
+      # Rekor round trip. The preflight still records the flag state, so if this
+      # cluster is ever upgraded to a version that has the cache, the artefact
+      # will say so and the condition can be added back.
 
 permissions:
   id-token: write
@@ -248,105 +247,21 @@ jobs:
           echo ""
           echo "Image verification cache flag: ${CACHE_FLAG}"
 
-      # ── Condition 1: baseline ─────────────────────────────────────────────
+      # ── The matrix ────────────────────────────────────────────────────────
+      # baseline / audit / enforce, in a randomised order, each preceded by an
+      # explicit wait for the cluster to report the state just requested and a
+      # settle period. See scripts/run-latency-matrix.sh for why the order is
+      # randomised: run in a fixed sequence, one condition always absorbs the
+      # webhook re-registration that follows a policy change, and its tail is
+      # then a property of its position rather than of the condition.
 
-      - name: Baseline — remove the policies
-        run: |
-          set -euo pipefail
-          kubectl delete clusterpolicy \
-            verify-image-signature verify-sbom-cyclonedx verify-slsa-provenance \
-            --ignore-not-found
-          sleep 15   # let Kyverno deregister its resource webhooks
-          kubectl get clusterpolicies -o wide 2>/dev/null || echo "(none — as intended)"
-
-      - name: Baseline — measure
-        run: bash scripts/measure-admission.sh baseline "${PROBE_IMAGE}" "${{ inputs.iterations }}"
-
-      # ── Condition 2: audit ────────────────────────────────────────────────
-      # Only validationFailureAction differs from the deployed policies. The old
-      # workflow also rewrote mutateDigest/verifyDigest between conditions, which
-      # confounded the failure action with digest mutation and measured a
-      # configuration that is never deployed.
-
-      - name: Audit — apply the policies in Audit mode
-        run: |
-          set -euo pipefail
-          REGISTRY_VAL=$(grep '^REGISTRY=' policies/values/${CLOUD}.env | cut -d= -f2)
-          mkdir -p /tmp/kyverno-audit
-          for f in policies/verify-*.yaml; do
-            sed "s|REGISTRY_PLACEHOLDER|${REGISTRY_VAL}|g" "$f" \
-              | sed "s/validationFailureAction: .*/validationFailureAction: Audit/" \
-              > "/tmp/kyverno-audit/$(basename $f)"
-          done
-          kubectl apply --server-side --force-conflicts -f /tmp/kyverno-audit/
-          sleep 15
-          kubectl get clusterpolicies -o wide
-
-      - name: Audit — measure
-        run: bash scripts/measure-admission.sh audit "${PROBE_IMAGE}" "${{ inputs.iterations }}"
-
-      # ── Condition 3: enforce ──────────────────────────────────────────────
-
-      - name: Enforce — apply the policies exactly as deployed
-        run: |
-          set -euo pipefail
-          REGISTRY_VAL=$(grep '^REGISTRY=' policies/values/${CLOUD}.env | cut -d= -f2)
-          mkdir -p /tmp/kyverno-enforce
-          for f in policies/verify-*.yaml; do
-            sed "s|REGISTRY_PLACEHOLDER|${REGISTRY_VAL}|g" "$f" \
-              > "/tmp/kyverno-enforce/$(basename $f)"
-          done
-          kubectl apply --server-side --force-conflicts -f /tmp/kyverno-enforce/
-          sleep 15
-          kubectl get clusterpolicies -o wide
-
-      - name: Enforce — measure
-        run: bash scripts/measure-admission.sh enforce "${PROBE_IMAGE}" "${{ inputs.iterations }}"
-
-      # ── Condition 4 (optional): enforce with the verification cache off ───
-      # Only runs when asked for AND when this Kyverno version has the flag.
-      # The flag is not exposed by chart 3.1.4, so it has to be patched onto the
-      # deployment — which hands the `kubectl-patch` field manager ownership of
-      # .args and will make the next `helm upgrade` conflict under Helm 4. The
-      # revert step below restores the args, and the run log says so explicitly.
-
-      - name: Enforce (cold cache) — disable the verification cache
-        id: nocache-on
-        if: ${{ inputs.measure_cold_cache && steps.preflight.outputs.cache_flag != 'not-supported' }}
-        run: |
-          set -euo pipefail
-          kubectl patch deployment kyverno-admission-controller -n kyverno --type=json \
-            -p='[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--imageVerifyCacheEnabled=false"}]'
-          kubectl rollout status deployment/kyverno-admission-controller -n kyverno --timeout=300s
-          sleep 15
-          echo "patched=true" >> $GITHUB_OUTPUT
-          echo "NOTE: the admission deployment now carries a kubectl-patch field"
-          echo "manager on .args. The revert step restores it; if a later helm"
-          echo "upgrade still conflicts, delete the deployment and re-run bootstrap."
-
-      - name: Enforce (cold cache) — measure
-        if: ${{ steps.nocache-on.outputs.patched == 'true' }}
-        run: bash scripts/measure-admission.sh enforce-nocache "${PROBE_IMAGE}" "${{ inputs.iterations }}"
-
-      - name: Enforce (cold cache) — restore the cache setting
-        if: ${{ always() && steps.nocache-on.outputs.patched == 'true' }}
-        run: |
-          ARGS=$(kubectl get deployment kyverno-admission-controller -n kyverno \
-            -o json | jq '[.spec.template.spec.containers[0].args[]
-                           | select(. != "--imageVerifyCacheEnabled=false")]')
-          kubectl patch deployment kyverno-admission-controller -n kyverno --type=json \
-            -p="[{\"op\":\"replace\",\"path\":\"/spec/template/spec/containers/0/args\",\"value\":${ARGS}}]"
-          kubectl rollout status deployment/kyverno-admission-controller -n kyverno --timeout=300s
-          echo "Verification cache setting restored"
-
-      - name: Record that the cold-cache condition was skipped
-        if: ${{ inputs.measure_cold_cache && steps.preflight.outputs.cache_flag == 'not-supported' }}
-        run: |
-          echo "Cold-cache condition requested but this Kyverno build has no"
-          echo "image verification cache flag (${{ steps.preflight.outputs.cache_flag }})."
-          echo "Every admission therefore pays the full verification path,"
-          echo "including the Rekor round trip — there is no warm/cold split to"
-          echo "isolate on this version. Recorded in the artefact."
+      - name: Measure the baseline / audit / enforce matrix
+        env:
+          ITERATIONS: ${{ inputs.iterations }}
+          SETTLE_SECONDS: '30'
+          WARMUP: '5'
+          RANDOM_SEED: ${{ github.run_id }}
+        run: bash scripts/run-latency-matrix.sh
 
       # ── Report ────────────────────────────────────────────────────────────
 
