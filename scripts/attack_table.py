@@ -17,6 +17,13 @@ Usage:
     python3 scripts/attack_table.py attack-results-aws.json attack-results-azure.json
     python3 scripts/attack_table.py --format markdown attack-results-*.json
     python3 scripts/attack_table.py --preset testcases testcase-results-aws.json
+    python3 scripts/attack_table.py fail-open.json fail-closed.json   # 1.3
+
+Columns are one per artefact, labelled by cluster. When two artefacts come from
+the same cluster — the fail-open / fail-closed comparison revision item 1.3
+asks for — the label gains the admission configuration each run recorded, so
+the two columns cannot be confused for each other or silently overwrite one
+another.
 
 Options:
     --format latex|markdown   output format (default: latex)
@@ -68,6 +75,8 @@ def load(paths):
     if not runs:
         sys.exit("no artefacts given")
 
+    label_runs(runs)
+
     order = [s["scenario"] for s in runs[0]["scenarios"]]
     for doc in runs[1:]:
         if [s["scenario"] for s in doc["scenarios"]] != order:
@@ -77,6 +86,45 @@ def load(paths):
                 "and must not be combined into one table"
             )
     return runs, order
+
+
+CLUSTER_NAMES = {"aws": "AWS EKS", "azure": "Azure AKS"}
+
+
+def label_runs(runs):
+    """Give every artefact a column label, disambiguated only when it has to be.
+
+    Keyed on cloud alone, a fail-open and a fail-closed run of the same cluster
+    collapse into one column and the second silently replaces the first. That is
+    exactly the comparison item 1.3 asks for, so the label falls back to the
+    admission configuration each run recorded — read from the cluster at
+    preflight, not from the workflow input — and then to the run id if even that
+    does not separate them.
+    """
+    for doc in runs:
+        run = doc["run"]
+        cloud = run.get("cloud", "?")
+        run["_label"] = CLUSTER_NAMES.get(cloud, cloud.upper())
+        run["_config"] = (run.get("admission") or {}).get("configuration")
+
+    seen = {}
+    for doc in runs:
+        seen.setdefault(doc["run"]["_label"], []).append(doc)
+
+    for label, group in seen.items():
+        if len(group) == 1:
+            continue
+        configs = [d["run"].get("_config") for d in group]
+        if len(set(configs)) == len(configs) and all(configs):
+            for doc in group:
+                doc["run"]["_label"] = f"{label} ({doc['run']['_config']})"
+        else:
+            for doc in group:
+                doc["run"]["_label"] = f"{label} (run {doc['run'].get('run_id', '?')})"
+
+    keys = [d["run"]["_label"] for d in runs]
+    if len(set(keys)) != len(keys):
+        sys.exit("two artefacts could not be told apart: " + ", ".join(keys))
 
 
 def cell(scenario, latex):
@@ -117,8 +165,9 @@ def totals(doc):
 
 
 def render_latex(runs, order, preset):
-    clouds = [doc["run"]["cloud"] for doc in runs]
-    by_cloud = {doc["run"]["cloud"]: {s["scenario"]: s for s in doc["scenarios"]} for doc in runs}
+    labels = [doc["run"]["_label"] for doc in runs]
+    by_label = {doc["run"]["_label"]: {s["scenario"]: s for s in doc["scenarios"]}
+                for doc in runs}
     first = {s["scenario"]: s for s in runs[0]["scenarios"]}
 
     out = []
@@ -127,21 +176,21 @@ def render_latex(runs, order, preset):
     for doc in runs:
         r = doc["run"]
         out.append(
-            f"%   {r['cloud']}: run {r['run_id']} ({r.get('run_url', 'n/a')}), "
+            f"%   {r['_label']}: run {r['run_id']} ({r.get('run_url', 'n/a')}), "
             f"generated {r['generated']}, kyverno {r.get('kyverno_image', 'unknown')}"
+            + (f", admission {r['_config']}" if r.get("_config") else "")
         )
-    CLUSTER_NAMES = {"aws": "AWS EKS", "azure": "Azure AKS"}
-    where = " and ".join(CLUSTER_NAMES.get(c, c) for c in clouds)
+    where = " and ".join(dict.fromkeys(labels))
     out.append("\\begin{table}[htbp]")
     out.append("  \\centering")
     out.append("  \\caption{" + preset["caption"].format(where=where) + "}")
     out.append(f"  \\label{{{preset['label']}}}")
-    cols = " ".join(["p{1.4cm}"] + ["X"] + ["p{1.8cm}"] * (1 + 1 + len(clouds)))
+    cols = " ".join(["p{1.4cm}"] + ["X"] + ["p{1.8cm}"] * (1 + 1 + len(labels)))
     out.append(f"  \\begin{{tabularx}}{{\\textwidth}}{{{cols}}}")
     out.append("    \\toprule")
     header = [f"\\textbf{{{preset['idcol']}}}", f"\\textbf{{{preset['column']}}}",
               "\\textbf{Requirements}", "\\textbf{Expected}"] + [
-                  f"\\textbf{{{CLUSTER_NAMES.get(c, c.upper())}}}" for c in clouds]
+                  f"\\textbf{{{escape(l)}}}" for l in labels]
     out.append("    " + " & ".join(header) + " \\\\")
     out.append("    \\midrule")
 
@@ -152,7 +201,7 @@ def render_latex(runs, order, preset):
             escape(meta["title"]),
             escape(", ".join(meta["requirements"])),
             OBSERVED_LABEL.get(meta["expected_admission"], meta["expected_admission"]),
-        ] + [cell(by_cloud[c][sid], latex=True) for c in clouds]
+        ] + [cell(by_label[l][sid], latex=True) for l in labels]
         out.append("    " + " & ".join(row) + " \\\\")
 
     out.append("    \\bottomrule")
@@ -162,31 +211,32 @@ def render_latex(runs, order, preset):
     for doc in runs:
         t = totals(doc)
         out.append(
-            f"% {doc['run']['cloud']}: {t['pass']}/{t['total']} {preset['noun']} matched the "
+            f"% {doc['run']['_label']}: {t['pass']}/{t['total']} {preset['noun']} matched the "
             f"expected admission outcome ({t['fail']} unexpected, {t['error']} not run or errored)"
         )
     return "\n".join(out)
 
 
 def render_markdown(runs, order, preset):
-    clouds = [doc["run"]["cloud"] for doc in runs]
-    by_cloud = {doc["run"]["cloud"]: {s["scenario"]: s for s in doc["scenarios"]} for doc in runs}
+    labels = [doc["run"]["_label"] for doc in runs]
+    by_label = {doc["run"]["_label"]: {s["scenario"]: s for s in doc["scenarios"]}
+                for doc in runs}
     first = {s["scenario"]: s for s in runs[0]["scenarios"]}
 
     out = [f"| {preset['idcol']} | {preset['column']} | Requirements | Expected | "
-           + " | ".join(c.upper() for c in clouds) + " |"]
-    out.append("|" + "---|" * (4 + len(clouds)))
+           + " | ".join(labels) + " |"]
+    out.append("|" + "---|" * (4 + len(labels)))
     for sid in order:
         meta = first[sid]
         row = [sid, meta["title"], ", ".join(meta["requirements"]),
                OBSERVED_LABEL.get(meta["expected_admission"], meta["expected_admission"])]
-        row += [cell(by_cloud[c][sid], latex=False) for c in clouds]
+        row += [cell(by_label[l][sid], latex=False) for l in labels]
         out.append("| " + " | ".join(row) + " |")
     out.append("")
     for doc in runs:
         r, t = doc["run"], totals(doc)
         out.append(
-            f"{r['cloud']}: {t['pass']}/{t['total']} as expected "
+            f"{r['_label']}: {t['pass']}/{t['total']} as expected "
             f"({t['fail']} unexpected, {t['error']} not run or errored) — run {r['run_id']}"
         )
     return "\n".join(out)
@@ -208,7 +258,10 @@ def main():
         preset["caption"] = args.caption
 
     runs, order = load(args.artefacts)
-    runs.sort(key=lambda d: d["run"]["cloud"])
+    # Sorted by cloud, then by configuration, so fail-open precedes fail-closed
+    # and the columns read in the order the discussion presents them.
+    runs.sort(key=lambda d: (d["run"].get("cloud", ""),
+                             d["run"].get("_label", "")))
     if args.format == "latex":
         print(render_latex(runs, order, preset))
     else:

@@ -12,6 +12,19 @@ admissionController:
   # serviceAccount annotations and podLabels for IRSA/Workload Identity are
   # set via --set in bootstrap.sh / bootstrap-azure.sh at install time.
 
+  # Three replicas without a disruption budget are three replicas that a node
+  # drain can remove at once. That is tolerable while the webhooks are
+  # failurePolicy=Ignore — the cost of losing every replica is unverified
+  # admissions — but it is not tolerable fail-closed, where the same event stops
+  # all pod creation in supply-chain-demo.
+  #
+  # minAvailable: 2 of 3 permits voluntary disruption of one replica at a time,
+  # so a rolling node upgrade proceeds and quorum of the admission service is
+  # kept throughout. It does not protect against involuntary loss (node failure,
+  # eviction under memory pressure); nothing in a PDB does.
+  podDisruptionBudget:
+    minAvailable: 2
+
 backgroundController:
   replicas: 1
 
@@ -38,19 +51,35 @@ cleanupJobs:
   clusterAdmissionReports:
     enabled: false
 
-# Fail-open: if Kyverno is temporarily unreachable, pods are still admitted.
-# This prevents a Kyverno outage from taking down the whole cluster.
-# In a production hardened environment, change to Fail and ensure Kyverno
-# has sufficient replicas and PodDisruptionBudgets.
+# ── The admission failure policy: the single control point ───────────────────
+#
+# true  = fail-open  (the default here). If Kyverno cannot be reached, pods are
+#         admitted *without verification*. A Kyverno outage cannot take the
+#         cluster down; it silently suspends the control instead.
+# false = fail-closed. Each ClusterPolicy's own failurePolicy applies, which
+#         defaults to Fail, so an outage rejects pod creation in every matched
+#         namespace rather than admitting unverified images.
 #
 # Kyverno generates its webhook configurations at runtime — they are not
-# rendered by the chart — so the fail-open behaviour comes from this controller
-# feature flag, which makes Kyverno write failurePolicy=Ignore into every
-# webhook it manages. Verified with:
+# rendered by the chart — so this controller feature flag is the whole control
+# surface. Kyverno creates paired `…svc-ignore` / `…svc-fail` webhooks and
+# routes each policy's rules to the matching side; this flag forces everything
+# onto the `-ignore` side. Verified with:
 #   helm template kyverno kyverno/kyverno --version 3.1.4 \
 #     --set features.forceFailurePolicyIgnore.enabled=true
 # A top-level `failurePolicy` or `forceFailurePolicyIgnore` value does not
 # exist in this chart; setting either is silently ignored.
+#
+# Do not switch this by patching the live WebhookConfiguration objects. That is
+# what the bootstraps and the pipeline used to do, in five separate places; it
+# fought whatever Kyverno wrote next and it caused the Helm field-manager
+# conflict. Use scripts/set-failure-policy.sh, which flips this flag, waits for
+# Kyverno to rewrite its webhooks, verifies every Pod-intercepting webhook
+# reports the requested value, and records the observed state for the artefact.
+#
+# The PodDisruptionBudget above is what makes fail-closed survivable; changing
+# this to false without it converts a routine node drain into a cluster-wide
+# outage of pod creation.
 features:
   forceFailurePolicyIgnore:
     enabled: true

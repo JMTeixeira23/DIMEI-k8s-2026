@@ -118,35 +118,29 @@ kubectl delete mutatingwebhookconfiguration kyverno-policy-mutating-webhook-cfg 
   --ignore-not-found
 echo "  ✅ Webhooks fixed"
 
-# ── Force webhooks to Ignore ─────────────────────────────────────────────────
-# The background controller reverts webhooks to Fail. Scale it down first,
-# patch all webhooks, then keep it down — it's only needed for background
-# scanning, not for admission enforcement which is what we need.
+# ── Scale down the background and reports controllers ────────────────────────
+# Neither participates in admission. The admission controller is what registers
+# and owns the webhook configurations; these two do background scanning and
+# report generation, which this evaluation does not use and which produce churn
+# in the metrics the latency experiment reads.
+#
+# This block used to also patch every Kyverno webhook to failurePolicy=Ignore,
+# on the belief that the background controller was reverting them to Fail. It
+# was not — Kyverno's admission controller writes those objects, and it writes
+# Ignore because features.forceFailurePolicyIgnore.enabled is true in
+# helm/kyverno-values.yaml. The patch loop fought whatever Kyverno wrote next,
+# gave kubectl-patch ownership of a field Helm also manages, and would have
+# silently reverted the fail-closed experiment to fail-open before it ran.
+# The failure policy now has exactly one control point: that Helm value, driven
+# by scripts/set-failure-policy.sh.
 echo ""
-echo "▶ Forcing webhook failurePolicy to Ignore..."
-
-# Scale down background + reports controllers so they stop reverting webhooks
-kubectl scale deployment kyverno-background-controller   -n "${KYVERNO_NS}" --replicas=0 2>/dev/null || true
-kubectl scale deployment kyverno-reports-controller   -n "${KYVERNO_NS}" --replicas=0 2>/dev/null || true
+echo "▶ Scaling down background and reports controllers..."
+kubectl scale deployment kyverno-background-controller \
+  -n "${KYVERNO_NS}" --replicas=0 2>/dev/null || true
+kubectl scale deployment kyverno-reports-controller \
+  -n "${KYVERNO_NS}" --replicas=0 2>/dev/null || true
 sleep 5
-
-# Patch all mutating webhooks
-for cfg in $(kubectl get mutatingwebhookconfigurations   --no-headers -o name | grep kyverno); do
-  COUNT=$(kubectl get ${cfg} -o json | jq '.webhooks | length')
-  for i in $(seq 0 $((COUNT-1))); do
-    kubectl patch ${cfg} --type=json       -p="[{\"op\":\"replace\",\"path\":\"/webhooks/${i}/failurePolicy\",\"value\":\"Ignore\"}]"       2>/dev/null || true
-  done
-  echo "  ✅ Patched ${cfg}"
-done
-
-# Patch all validating webhooks
-for cfg in $(kubectl get validatingwebhookconfigurations   --no-headers -o name | grep kyverno); do
-  COUNT=$(kubectl get ${cfg} -o json | jq '.webhooks | length')
-  for i in $(seq 0 $((COUNT-1))); do
-    kubectl patch ${cfg} --type=json       -p="[{\"op\":\"replace\",\"path\":\"/webhooks/${i}/failurePolicy\",\"value\":\"Ignore\"}]"       2>/dev/null || true
-  done
-  echo "  ✅ Patched ${cfg}"
-done
+echo "  ✅ background and reports controllers scaled to 0"
 
 # ── Step 4: Remove leftovers from the cleanup CronJobs ───────────────────────
 # The CronJobs are no longer installed — cleanupJobs.*.enabled=false in
@@ -206,18 +200,32 @@ echo "  ✅ supply-chain-demo ready"
 kubectl label namespace default kyverno.io/exclude=always --overwrite
 echo "  ✅ default namespace excluded from Kyverno webhooks"
 
-# ── Step 8: Set all Kyverno webhooks to Ignore ───────────────────────────────
-# Prevents "context deadline exceeded" errors when webhook is briefly unavailable.
+# ── Verify the admission failure policy ──────────────────────────────────────
+# Read back rather than patched. The value comes from
+# features.forceFailurePolicyIgnore.enabled in helm/kyverno-values.yaml; this
+# step exists so the bootstrap fails loudly if the cluster does not agree with
+# the file, instead of forcing agreement and hiding a drift.
+#
+# To switch between fail-open and fail-closed, do not edit this block:
+#   bash scripts/set-failure-policy.sh fail
+#   bash scripts/set-failure-policy.sh ignore
 echo ""
-echo "▶ Setting Kyverno webhooks to failurePolicy=Ignore..."
-for wh in $(kubectl get mutatingwebhookconfigurations   --no-headers -o name | grep kyverno); do
-  kubectl get "${wh}" -o json     | jq '.webhooks[].failurePolicy = "Ignore"'     | kubectl apply -f - 2>/dev/null || true
-  echo "  ✅ Patched ${wh}"
-done
-for wh in $(kubectl get validatingwebhookconfigurations   --no-headers -o name | grep kyverno); do
-  kubectl get "${wh}" -o json     | jq '.webhooks[].failurePolicy = "Ignore"'     | kubectl apply -f - 2>/dev/null || true
-  echo "  ✅ Patched ${wh}"
-done
+echo "▶ Verifying admission failure policy..."
+POD_WEBHOOKS=$(kubectl get validatingwebhookconfigurations,mutatingwebhookconfigurations \
+  -o json 2>/dev/null \
+  | jq -r '[ .items[]
+             | select(.metadata.name | test("kyverno"))
+             | .webhooks[]?
+             | select(any(.rules[]?;
+                 (.resources[]? == "pods") or (.resources[]? == "*")))
+             | "\(.name)=\(.failurePolicy)" ] | unique | join(" ")' \
+  2>/dev/null || true)
+echo "  Pod-intercepting webhooks: ${POD_WEBHOOKS:-<none>}"
+if [ -z "${POD_WEBHOOKS}" ]; then
+  echo "  ⚠️  no Pod-intercepting Kyverno webhook found — policies may not be applied yet"
+else
+  echo "  ✅ failure policy read from the cluster, not imposed on it"
+fi
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""

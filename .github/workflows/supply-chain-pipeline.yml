@@ -258,23 +258,21 @@ jobs:
           kubectl label namespace default kyverno.io/exclude=always \
             --overwrite 2>/dev/null || true
 
-      # Force Kyverno webhooks to failurePolicy=Ignore so that a brief webhook
-      # unavailability does not block unrelated kubectl operations. Kyverno 3.1.4
-      # does not respect the Helm value for this - must be patched directly.
-      - name: Set Kyverno webhooks to failurePolicy=Ignore
-        run: |
-          for cfg in kyverno-policy-mutating-webhook-cfg \
-                     kyverno-resource-mutating-webhook-cfg; do
-            COUNT=$(kubectl get mutatingwebhookconfiguration "${cfg}" \
-              -o jsonpath='{.webhooks}' \
-              | python3 -c "import sys,json; print(len(json.load(sys.stdin)))" \
-              2>/dev/null || echo 1)
-            PATCH=$(python3 -c "import json; n=int('${COUNT}'); \
-              print(json.dumps([{'op':'replace','path':f'/webhooks/{i}/failurePolicy','value':'Ignore'} \
-              for i in range(n)]))")
-            kubectl patch mutatingwebhookconfiguration "${cfg}" \
-              --type=json -p="${PATCH}" 2>/dev/null || true
-          done
+      # The failure policy is NOT set here. It comes from
+      # features.forceFailurePolicyIgnore.enabled in helm/kyverno-values.yaml,
+      # and is changed only by scripts/set-failure-policy.sh.
+      #
+      # This step used to patch the mutating webhook configurations to
+      # failurePolicy=Ignore on every pipeline run, with a comment claiming the
+      # Helm value was not respected. The Helm value is respected — it is a
+      # controller feature flag, not a chart-rendered field, so it takes effect
+      # when Kyverno next writes its webhooks rather than at template time. The
+      # patch was therefore redundant, and worse: it would have reverted the
+      # cluster to fail-open in the middle of a fail-closed evaluation, because
+      # the pipeline runs on every push to docker/.
+      #
+      # The state is recorded instead of imposed — see the preflight step below,
+      # which writes the observed webhook failure policies into the artefact.
 
       # --- Smoke test ------------------------------------------------------
       # Resolve the digest from the registry (digest env var may not persist
@@ -418,11 +416,16 @@ jobs:
             --arg default_ns_label "$(kubectl get namespace default \
               -o jsonpath='{.metadata.labels.kyverno\.io/exclude}' 2>/dev/null || echo '')" \
             --argjson policies "${POLICY_STATE}" \
+            --argjson admission "$(bash scripts/webhook-state.sh)" \
             '{kubectl_context: $context, kyverno_image: $kyverno_image,
               kyverno_ready_replicas: $replicas,
               default_namespace_exclude_label: $default_ns_label,
+              admission: $admission,
               policies: $policies}' \
             > "${RESULTS_DIR}/_preflight.json"
+
+          echo "  admission configuration: $(jq -r '.admission.configuration' \
+            "${RESULTS_DIR}/_preflight.json")"
 
           if [ "${FAIL}" = "1" ]; then
             echo "ERROR: the admission tests require all three policies present, ready and in Enforce."

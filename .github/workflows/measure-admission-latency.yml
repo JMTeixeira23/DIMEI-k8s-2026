@@ -54,6 +54,15 @@ on:
         description: 'Requests per image size — size experiment (default: 20)'
         required: false
         default: '20'
+      failure_policy:
+        description: >-
+          Admission failure configuration to measure under. "as-is" measures the
+          cluster as it stands. "ignore" is fail-open, "fail" is fail-closed;
+          both switch the cluster before measurement and leave it that way.
+        required: false
+        default: 'as-is'
+        type: choice
+        options: [as-is, ignore, fail]
       # There is deliberately no cold-cache input. Kyverno v1.11.4 has no image
       # verification cache — confirmed from the running container's arguments,
       # and chart 3.1.4 exposes no such value — so there is no warm/cold split to
@@ -188,6 +197,18 @@ jobs:
 
           echo "PROBE_IMAGE=${REGISTRY}/${REPO}@${DIGEST}" >> $GITHUB_ENV
           echo "Image under test: ${REGISTRY}/${REPO}@${DIGEST}  (tag ${TAG})"
+      # ── Admission failure configuration ───────────────────────────────
+      # Revision 1.3 requires the performance evaluation to be reported under
+      # both fail-open and fail-closed. Under fail-closed a slow webhook stops
+      # being free: the request waits the full webhook timeout and is then
+      # rejected, rather than waiting and being admitted unverified. The tail of
+      # the distribution is where that difference shows, which is why the
+      # percentiles matter more here than the mean.
+      - name: Set the admission failure policy
+        if: ${{ inputs.failure_policy != 'as-is' }}
+        run: |
+          bash scripts/set-failure-policy.sh "${{ inputs.failure_policy }}"
+
 
       # ── Preflight ─────────────────────────────────────────────────────────
 
@@ -236,9 +257,11 @@ jobs:
             --arg namespace "${NAMESPACE}" \
             --arg run_url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
             --arg generated "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --argjson admission "$(bash scripts/webhook-state.sh)" \
             '{cloud: $cloud, probe_image: $image, kyverno_image: $kyverno_image,
               kyverno_ready_replicas: $replicas, admission_controller_args: $args,
               mutating_webhook_failure_policies: $webhooks,
+              admission: $admission,
               image_verify_cache_flag: $cache_flag, kubectl_context: $context,
               probe_namespace: $namespace, run_url: $run_url, generated: $generated}' \
             > "${RESULTS_DIR}/_environment.json"
@@ -548,10 +571,11 @@ jobs:
             --arg run_url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
             --arg generated "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --argjson images "$(cat /tmp/size-refs/_sizes.json)" \
+            --argjson admission "$(bash scripts/webhook-state.sh)" \
             '{cloud: $cloud, kyverno_image: $kyverno_image,
               kyverno_ready_replicas: $replicas, probe_namespace: $namespace,
               experiment: "image size vs admission cost",
-              images: $images,
+              images: $images, admission: $admission,
               run_url: $run_url, generated: $generated}' \
             > "${RESULTS_DIR}/_environment.json"
 

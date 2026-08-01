@@ -30,6 +30,16 @@ on:
         default: 'both'
         type: choice
         options: [both, aws, azure]
+      failure_policy:
+        description: >-
+          Admission failure configuration to evaluate under. "as-is" measures
+          the cluster as it stands and changes nothing. "ignore" is fail-open,
+          "fail" is fail-closed — both switch the cluster before the scenarios
+          run and leave it that way, so pair them with a deliberate restore.
+        required: false
+        default: 'as-is'
+        type: choice
+        options: [as-is, ignore, fail]
       probe_namespace_mechanism:
         description: >-
           Diagnostic: also determine which mechanism keeps the default namespace
@@ -152,6 +162,22 @@ jobs:
           cosign version
           syft version
 
+      # ── Admission failure configuration ───────────────────────────────────
+      # Revision 1.3 requires the security evaluation to be reported under both
+      # fail-open and fail-closed. Switching it here, immediately before the
+      # preflight, means the artefact's recorded configuration is the one the
+      # scenarios actually ran under — the preflight reads the cluster back
+      # rather than echoing this input.
+      #
+      # Left as-is by default. A run that changes the configuration leaves it
+      # changed, deliberately: silently restoring it would mean the cluster a
+      # later run measures depends on which run happened to finish last.
+
+      - name: Set the admission failure policy
+        if: ${{ inputs.failure_policy != 'as-is' }}
+        run: |
+          bash scripts/set-failure-policy.sh "${{ inputs.failure_policy }}"
+
       # ── Preflight ─────────────────────────────────────────────────────────
       # Records the enforcement state the scenarios ran against, so the artefact
       # carries its own evidence that the cluster was in Enforce mode.
@@ -208,12 +234,14 @@ jobs:
             --arg webhook_failure_policies "${FAILURE_POLICIES:-unknown}" \
             --arg default_ns_exclude_label "${NS_EXCLUDE_LABEL:-none}" \
             --arg context "$(kubectl config current-context)" \
+            --argjson admission "$(bash scripts/webhook-state.sh)" \
             '{
                kubectl_context:          $context,
                kyverno_image:            $kyverno_image,
                kyverno_ready_replicas:   $kyverno_replicas,
                webhook_failure_policies: $webhook_failure_policies,
                default_ns_exclude_label: $default_ns_exclude_label,
+               admission:                $admission,
                policies:                 $policies
              }' > "${RESULTS_DIR}/_preflight.json"
 
