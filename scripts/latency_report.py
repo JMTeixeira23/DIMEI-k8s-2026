@@ -176,13 +176,16 @@ def main():
     requests, rejected, sent = read_requests(
         os.path.join(args.results_dir, "requests.csv"))
 
-    # Conditions in the order they were measured, discovered from what exists
-    # rather than assumed, so a condition that was skipped is absent instead of
-    # being reported as zero.
-    known_order = ["baseline", "audit", "enforce", "enforce-nocache"]
+    # Conditions are reported in a canonical reading order, not the order they
+    # were measured: measurement order is randomised on purpose, and a table
+    # whose rows move between runs is hard to compare. The order actually
+    # executed is preserved in environment["execution"]. Conditions are still
+    # discovered from what exists, so one that was skipped is absent rather than
+    # reported as zero, and anything unrecognised keeps its measured position.
+    known_order = ["baseline", "audit", "enforce", "enforce-nocache",
+                   "size-small", "size-medium", "size-large", "size-xlarge"]
     measured = [c for c in known_order if c in sent]
-    for extra in sorted(set(sent) - set(known_order)):
-        measured.append(extra)
+    measured += [c for c in sent if c not in known_order]
 
     conditions = []
     for cond in measured:

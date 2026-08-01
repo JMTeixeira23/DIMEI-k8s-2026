@@ -1,0 +1,439 @@
+{
+  "cloud": "aws",
+  "environment": {
+    "cloud": "aws",
+    "probe_image": "812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world@sha256:7fe9ce10b8e46ad8743e08af73c05ec31bdf0bd34a1cea12ce7e76ffdfcd1c95",
+    "kyverno_image": "ghcr.io/kyverno/kyverno:v1.11.4",
+    "kyverno_ready_replicas": "3",
+    "admission_controller_args": "[\"--caSecretName=kyverno-svc.kyverno.svc.kyverno-tls-ca\",\"--tlsSecretName=kyverno-svc.kyverno.svc.kyverno-tls-pair\",\"--backgroundServiceAccountName=system:serviceaccount:kyverno:kyverno-background-controller\",\"--servicePort=443\",\"--disableMetrics=false\",\"--otelConfig=prometheus\",\"--metricsPort=8000\",\"--admissionReports=true\",\"--autoUpdateWebhooks=true\",\"--enableConfigMapCaching=true\",\"--enableDeferredLoading=true\",\"--dumpPayload=false\",\"--forceFailurePolicyIgnore=true\",\"--generateValidatingAdmissionPolicy=false\",\"--loggingFormat=text\",\"--v=2\",\"--enablePolicyException=true\",\"--protectManagedResources=false\",\"--allowInsecureRegistry=false\",\"--registryCredentialHelpers=default,google,amazon,azure,github\"]",
+    "mutating_webhook_failure_policies": "mutate-policy.kyverno.svc=Fail mutate.kyverno.svc-ignore=Ignore monitor-webhooks.kyverno.svc=Ignore",
+    "image_verify_cache_flag": "not-supported",
+    "kubectl_context": "arn:aws:eks:eu-west-1:812982728774:cluster/supply-chain-eks",
+    "probe_namespace": "supply-chain-demo",
+    "run_url": "https://github.com/JMTeixeira23/DIMEI-k8s-2026/actions/runs/30692789440",
+    "generated": "2026-08-01T08:58:05Z",
+    "execution": {
+      "condition_order": [
+        "baseline",
+        "enforce",
+        "audit"
+      ],
+      "random_seed": "30692789440",
+      "settle_seconds": 30,
+      "warmup_discarded": 5,
+      "rationale": "conditions randomised so no single condition systematically absorbs webhook re-registration after a policy change"
+    }
+  },
+  "method": {
+    "in_webhook_cost": "Kyverno admission_review histogram, delta_sum/delta_count summed across replicas; undefined for baseline because no webhook runs",
+    "request_cost": "client-side wall clock per create request; includes constant kubectl startup and network round trip",
+    "percentiles": "nearest-rank on observed samples, no interpolation",
+    "probe": "unschedulable pods in the policy-matched namespace, so admission is exercised without image pull or scheduling"
+  },
+  "conditions": [
+    {
+      "condition": "baseline",
+      "requests_sent": 30,
+      "request_cost": {
+        "n": 30,
+        "min_ms": 1975,
+        "p50_ms": 2012,
+        "p95_ms": 2171,
+        "p99_ms": 2191,
+        "max_ms": 2191,
+        "mean_ms": 2039.3,
+        "stdev_ms": 59.72
+      },
+      "rejected_requests": 0,
+      "in_webhook_cost": null,
+      "policy_breakdown": []
+    },
+    {
+      "condition": "audit",
+      "requests_sent": 30,
+      "request_cost": {
+        "n": 30,
+        "min_ms": 2009,
+        "p50_ms": 2069,
+        "p95_ms": 2163,
+        "p99_ms": 2287,
+        "max_ms": 2287,
+        "mean_ms": 2083.03,
+        "stdev_ms": 54.93
+      },
+      "rejected_requests": 0,
+      "in_webhook_cost": {
+        "admission_reviews": 60.0,
+        "reviews_per_request": 2.0,
+        "mean_per_review_ms": 19.824,
+        "per_request_ms": 39.648,
+        "total_seconds": 1.1894
+      },
+      "policy_breakdown": [
+        {
+          "policy": "verify-image-signature",
+          "rule": "check-image-signature",
+          "executions": 60.0,
+          "mean_ms": 3.291,
+          "total_ms": 197.478,
+          "labels": {
+            "otel_scope_name": "kyverno",
+            "otel_scope_version": "",
+            "policy_background_mode": "true",
+            "policy_name": "verify-image-signature",
+            "policy_namespace": "-",
+            "policy_type": "cluster",
+            "policy_validation_mode": "audit",
+            "resource_kind": "Pod",
+            "resource_namespace": "supply-chain-demo",
+            "resource_request_operation": "create",
+            "rule_execution_cause": "admission_request",
+            "rule_name": "check-image-signature",
+            "rule_result": "pass",
+            "rule_type": "validate"
+          }
+        },
+        {
+          "policy": "verify-image-signature",
+          "rule": "block-unapproved-registry",
+          "executions": 60.0,
+          "mean_ms": 3.742,
+          "total_ms": 224.542,
+          "labels": {
+            "otel_scope_name": "kyverno",
+            "otel_scope_version": "",
+            "policy_background_mode": "true",
+            "policy_name": "verify-image-signature",
+            "policy_namespace": "-",
+            "policy_type": "cluster",
+            "policy_validation_mode": "audit",
+            "resource_kind": "Pod",
+            "resource_namespace": "supply-chain-demo",
+            "resource_request_operation": "create",
+            "rule_execution_cause": "admission_request",
+            "rule_name": "block-unapproved-registry",
+            "rule_result": "pass",
+            "rule_type": "validate"
+          }
+        },
+        {
+          "policy": "verify-sbom-cyclonedx",
+          "rule": "check-sbom-cyclonedx",
+          "executions": 30.0,
+          "mean_ms": 3.065,
+          "total_ms": 91.95,
+          "labels": {
+            "otel_scope_name": "kyverno",
+            "otel_scope_version": "",
+            "policy_background_mode": "true",
+            "policy_name": "verify-sbom-cyclonedx",
+            "policy_namespace": "-",
+            "policy_type": "cluster",
+            "policy_validation_mode": "audit",
+            "resource_kind": "Pod",
+            "resource_namespace": "supply-chain-demo",
+            "resource_request_operation": "create",
+            "rule_execution_cause": "admission_request",
+            "rule_name": "check-sbom-cyclonedx",
+            "rule_result": "pass",
+            "rule_type": "validate"
+          }
+        },
+        {
+          "policy": "verify-slsa-provenance",
+          "rule": "check-slsa-provenance",
+          "executions": 30.0,
+          "mean_ms": 2.939,
+          "total_ms": 88.18,
+          "labels": {
+            "otel_scope_name": "kyverno",
+            "otel_scope_version": "",
+            "policy_background_mode": "true",
+            "policy_name": "verify-slsa-provenance",
+            "policy_namespace": "-",
+            "policy_type": "cluster",
+            "policy_validation_mode": "audit",
+            "resource_kind": "Pod",
+            "resource_namespace": "supply-chain-demo",
+            "resource_request_operation": "create",
+            "rule_execution_cause": "admission_request",
+            "rule_name": "check-slsa-provenance",
+            "rule_result": "pass",
+            "rule_type": "validate"
+          }
+        },
+        {
+          "policy": "verify-sbom-cyclonedx",
+          "rule": "check-sbom-cyclonedx",
+          "executions": 30.0,
+          "mean_ms": 4.227,
+          "total_ms": 126.825,
+          "labels": {
+            "otel_scope_name": "kyverno",
+            "otel_scope_version": "",
+            "policy_background_mode": "true",
+            "policy_name": "verify-sbom-cyclonedx",
+            "policy_namespace": "-",
+            "policy_type": "cluster",
+            "policy_validation_mode": "audit",
+            "resource_kind": "Pod",
+            "resource_namespace": "supply-chain-demo",
+            "resource_request_operation": "create",
+            "rule_execution_cause": "admission_request",
+            "rule_name": "check-sbom-cyclonedx",
+            "rule_result": "pass",
+            "rule_type": "imageVerify"
+          }
+        },
+        {
+          "policy": "verify-slsa-provenance",
+          "rule": "check-slsa-provenance",
+          "executions": 30.0,
+          "mean_ms": 4.013,
+          "total_ms": 120.381,
+          "labels": {
+            "otel_scope_name": "kyverno",
+            "otel_scope_version": "",
+            "policy_background_mode": "true",
+            "policy_name": "verify-slsa-provenance",
+            "policy_namespace": "-",
+            "policy_type": "cluster",
+            "policy_validation_mode": "audit",
+            "resource_kind": "Pod",
+            "resource_namespace": "supply-chain-demo",
+            "resource_request_operation": "create",
+            "rule_execution_cause": "admission_request",
+            "rule_name": "check-slsa-provenance",
+            "rule_result": "pass",
+            "rule_type": "imageVerify"
+          }
+        },
+        {
+          "policy": "verify-image-signature",
+          "rule": "check-image-signature",
+          "executions": 30.0,
+          "mean_ms": 4.834,
+          "total_ms": 145.024,
+          "labels": {
+            "otel_scope_name": "kyverno",
+            "otel_scope_version": "",
+            "policy_background_mode": "true",
+            "policy_name": "verify-image-signature",
+            "policy_namespace": "-",
+            "policy_type": "cluster",
+            "policy_validation_mode": "audit",
+            "resource_kind": "Pod",
+            "resource_namespace": "supply-chain-demo",
+            "resource_request_operation": "create",
+            "rule_execution_cause": "admission_request",
+            "rule_name": "check-image-signature",
+            "rule_result": "pass",
+            "rule_type": "imageVerify"
+          }
+        }
+      ]
+    },
+    {
+      "condition": "enforce",
+      "requests_sent": 30,
+      "request_cost": {
+        "n": 30,
+        "min_ms": 2014,
+        "p50_ms": 2060,
+        "p95_ms": 2149,
+        "p99_ms": 2154,
+        "max_ms": 2154,
+        "mean_ms": 2075,
+        "stdev_ms": 36.46
+      },
+      "rejected_requests": 0,
+      "in_webhook_cost": {
+        "admission_reviews": 60.0,
+        "reviews_per_request": 2.0,
+        "mean_per_review_ms": 22.728,
+        "per_request_ms": 45.456,
+        "total_seconds": 1.3637
+      },
+      "policy_breakdown": [
+        {
+          "policy": "verify-image-signature",
+          "rule": "check-image-signature",
+          "executions": 60.0,
+          "mean_ms": 3.214,
+          "total_ms": 192.82,
+          "labels": {
+            "otel_scope_name": "kyverno",
+            "otel_scope_version": "",
+            "policy_background_mode": "true",
+            "policy_name": "verify-image-signature",
+            "policy_namespace": "-",
+            "policy_type": "cluster",
+            "policy_validation_mode": "enforce",
+            "resource_kind": "Pod",
+            "resource_namespace": "supply-chain-demo",
+            "resource_request_operation": "create",
+            "rule_execution_cause": "admission_request",
+            "rule_name": "check-image-signature",
+            "rule_result": "pass",
+            "rule_type": "validate"
+          }
+        },
+        {
+          "policy": "verify-image-signature",
+          "rule": "block-unapproved-registry",
+          "executions": 60.0,
+          "mean_ms": 3.812,
+          "total_ms": 228.694,
+          "labels": {
+            "otel_scope_name": "kyverno",
+            "otel_scope_version": "",
+            "policy_background_mode": "true",
+            "policy_name": "verify-image-signature",
+            "policy_namespace": "-",
+            "policy_type": "cluster",
+            "policy_validation_mode": "enforce",
+            "resource_kind": "Pod",
+            "resource_namespace": "supply-chain-demo",
+            "resource_request_operation": "create",
+            "rule_execution_cause": "admission_request",
+            "rule_name": "block-unapproved-registry",
+            "rule_result": "pass",
+            "rule_type": "validate"
+          }
+        },
+        {
+          "policy": "verify-sbom-cyclonedx",
+          "rule": "check-sbom-cyclonedx",
+          "executions": 30.0,
+          "mean_ms": 3.021,
+          "total_ms": 90.624,
+          "labels": {
+            "otel_scope_name": "kyverno",
+            "otel_scope_version": "",
+            "policy_background_mode": "true",
+            "policy_name": "verify-sbom-cyclonedx",
+            "policy_namespace": "-",
+            "policy_type": "cluster",
+            "policy_validation_mode": "enforce",
+            "resource_kind": "Pod",
+            "resource_namespace": "supply-chain-demo",
+            "resource_request_operation": "create",
+            "rule_execution_cause": "admission_request",
+            "rule_name": "check-sbom-cyclonedx",
+            "rule_result": "pass",
+            "rule_type": "validate"
+          }
+        },
+        {
+          "policy": "verify-sbom-cyclonedx",
+          "rule": "check-sbom-cyclonedx",
+          "executions": 30.0,
+          "mean_ms": 3.633,
+          "total_ms": 109.001,
+          "labels": {
+            "otel_scope_name": "kyverno",
+            "otel_scope_version": "",
+            "policy_background_mode": "true",
+            "policy_name": "verify-sbom-cyclonedx",
+            "policy_namespace": "-",
+            "policy_type": "cluster",
+            "policy_validation_mode": "enforce",
+            "resource_kind": "Pod",
+            "resource_namespace": "supply-chain-demo",
+            "resource_request_operation": "create",
+            "rule_execution_cause": "admission_request",
+            "rule_name": "check-sbom-cyclonedx",
+            "rule_result": "pass",
+            "rule_type": "imageVerify"
+          }
+        },
+        {
+          "policy": "verify-image-signature",
+          "rule": "check-image-signature",
+          "executions": 30.0,
+          "mean_ms": 3.746,
+          "total_ms": 112.382,
+          "labels": {
+            "otel_scope_name": "kyverno",
+            "otel_scope_version": "",
+            "policy_background_mode": "true",
+            "policy_name": "verify-image-signature",
+            "policy_namespace": "-",
+            "policy_type": "cluster",
+            "policy_validation_mode": "enforce",
+            "resource_kind": "Pod",
+            "resource_namespace": "supply-chain-demo",
+            "resource_request_operation": "create",
+            "rule_execution_cause": "admission_request",
+            "rule_name": "check-image-signature",
+            "rule_result": "pass",
+            "rule_type": "imageVerify"
+          }
+        },
+        {
+          "policy": "verify-slsa-provenance",
+          "rule": "check-slsa-provenance",
+          "executions": 30.0,
+          "mean_ms": 4.267,
+          "total_ms": 128.018,
+          "labels": {
+            "otel_scope_name": "kyverno",
+            "otel_scope_version": "",
+            "policy_background_mode": "true",
+            "policy_name": "verify-slsa-provenance",
+            "policy_namespace": "-",
+            "policy_type": "cluster",
+            "policy_validation_mode": "enforce",
+            "resource_kind": "Pod",
+            "resource_namespace": "supply-chain-demo",
+            "resource_request_operation": "create",
+            "rule_execution_cause": "admission_request",
+            "rule_name": "check-slsa-provenance",
+            "rule_result": "pass",
+            "rule_type": "imageVerify"
+          }
+        },
+        {
+          "policy": "verify-slsa-provenance",
+          "rule": "check-slsa-provenance",
+          "executions": 30.0,
+          "mean_ms": 3.142,
+          "total_ms": 94.262,
+          "labels": {
+            "otel_scope_name": "kyverno",
+            "otel_scope_version": "",
+            "policy_background_mode": "true",
+            "policy_name": "verify-slsa-provenance",
+            "policy_namespace": "-",
+            "policy_type": "cluster",
+            "policy_validation_mode": "enforce",
+            "resource_kind": "Pod",
+            "resource_namespace": "supply-chain-demo",
+            "resource_request_operation": "create",
+            "rule_execution_cause": "admission_request",
+            "rule_name": "check-slsa-provenance",
+            "rule_result": "pass",
+            "rule_type": "validate"
+          }
+        }
+      ]
+    }
+  ],
+  "comparisons": {
+    "enforce_vs_baseline_request_cost": {
+      "p50_delta_ms": 48,
+      "p95_delta_ms": -22,
+      "mean_delta_ms": 35.7
+    },
+    "enforce_vs_audit_request_cost": {
+      "p50_delta_ms": -9,
+      "p95_delta_ms": -14,
+      "mean_delta_ms": -8.03
+    },
+    "audit_vs_baseline_request_cost": {
+      "p50_delta_ms": 57,
+      "p95_delta_ms": -8,
+      "mean_delta_ms": 43.73
+    }
+  }
+}

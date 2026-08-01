@@ -426,8 +426,36 @@ jobs:
               --predicate provenance.json "${IMAGE_REF}"
 
             echo "${IMAGE_REF}" > /tmp/size-refs/${SIZE}.txt
+
+            # The independent variable of this experiment, measured rather than
+            # asserted. Until this existed, the only record of how big these
+            # images were was a comment in the Dockerfile, which is not evidence
+            # — "admission cost is flat across an 80x size range" cannot be
+            # written without the range. Sizes are the compressed bytes the
+            # registry stores, which is what a puller transfers; the point of
+            # the experiment is that Kyverno transfers none of it.
+            docker manifest inspect "${IMAGE_REF}" > /tmp/manifest-${SIZE}.json
+            jq -n \
+              --arg name "${SIZE}" \
+              --arg ref "${IMAGE_REF}" \
+              --arg digest "${DIGEST}" \
+              --argjson manifest "$(cat /tmp/manifest-${SIZE}.json)" \
+              '{name: $name, image_ref: $ref, digest: $digest,
+                compressed_bytes: ([$manifest.config.size]
+                                   + [$manifest.layers[].size] | add),
+                layer_count: ($manifest.layers | length)}' \
+              > /tmp/size-refs/${SIZE}.json
+
             echo "${SIZE} -> ${IMAGE_REF}"
+            jq -r '"  \(.compressed_bytes) bytes in \(.layer_count) layers"' \
+              /tmp/size-refs/${SIZE}.json
           done
+
+          jq -s 'sort_by(.compressed_bytes)' /tmp/size-refs/*.json \
+            > /tmp/size-refs/_sizes.json
+          echo "── measured sizes ──"
+          jq -r '.[] | "\(.name)\t\(.compressed_bytes) bytes\t\(.layer_count) layers"' \
+            /tmp/size-refs/_sizes.json
 
       - name: Upload size image refs
         uses: actions/upload-artifact@v4
@@ -519,16 +547,36 @@ jobs:
             --arg namespace "${NAMESPACE}" \
             --arg run_url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
             --arg generated "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --argjson images "$(cat /tmp/size-refs/_sizes.json)" \
             '{cloud: $cloud, kyverno_image: $kyverno_image,
               kyverno_ready_replicas: $replicas, probe_namespace: $namespace,
               experiment: "image size vs admission cost",
+              images: $images,
               run_url: $run_url, generated: $generated}' \
             > "${RESULTS_DIR}/_environment.json"
 
+      # Randomised for the same reason the policy matrix is: run in a fixed
+      # ascending order, whichever size goes first absorbs session warm-up and
+      # reports as the slowest. On run 30692789440 that produced "smaller images
+      # are admitted more slowly" at p = 0.02 in both comparisons against the
+      # first condition — an effect no mechanism can produce, and a drift of the
+      # same magnitude as the entire enforce-vs-baseline result.
       - name: Measure admission cost per image size
         run: |
           set -euo pipefail
-          for SIZE in small medium large xlarge; do
+          SEED="${GITHUB_RUN_ID}"
+          mapfile -t ORDER < <(printf '%s\n' small medium large xlarge \
+            | shuf --random-source=<(yes "${SEED}"))
+
+          echo "Size order: ${ORDER[*]}   (seed ${SEED})"
+          jq -n \
+            --arg seed "${SEED}" \
+            --argjson order "$(printf '%s\n' "${ORDER[@]}" | jq -R . | jq -s .)" \
+            '{condition_order: $order, random_seed: $seed,
+              rationale: "sizes randomised so no single size systematically absorbs session warm-up"}' \
+            > "${RESULTS_DIR}/_order.json"
+
+          for SIZE in "${ORDER[@]}"; do
             IMAGE_REF=$(cat /tmp/size-refs/${SIZE}.txt)
             bash scripts/measure-admission.sh "size-${SIZE}" "${IMAGE_REF}" \
               "${{ inputs.size_iterations }}" "size"

@@ -1,0 +1,4 @@
+large 812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world@sha256:c00eda04a323f8c109a59f5e9ca104de309cfb820a128bba5cfb37608f17c9dc
+medium 812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world@sha256:59e75308eb3df34b4b0c3539f70e3e4663833ec5b028e58cba329cd4e00fcda4
+small 812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world@sha256:4d88ed8255af9ea68b2727e08fb9b159fe43ac45084130e28f715e7b269b046a
+xlarge 812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world@sha256:43b9073747d3ca509911d1e639efad17877659335ac956ce5249d2a90d511b02
