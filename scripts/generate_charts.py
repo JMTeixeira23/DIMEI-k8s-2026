@@ -5,7 +5,7 @@ Generates admission latency charts from Phase 4 measurement data.
 Usage:
     # Download the latency-aws and latency-azure artifacts from the
     # 'Measure Admission Latency' GitHub Actions run, then:
-    python3 docs/generate_charts.py latency-aws.csv latency-azure.csv
+    python3 scripts/generate_charts.py latency-aws.csv latency-azure.csv
 
 Output:
     docs/figures/admission_latency_overhead.png

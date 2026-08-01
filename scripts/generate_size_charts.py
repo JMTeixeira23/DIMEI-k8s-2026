@@ -5,7 +5,7 @@ Generates image size vs admission latency charts from Phase 4b data.
 Usage:
     # Download the size-latency-aws and size-latency-azure artifacts from
     # the 'Measure Admission Latency' GitHub Actions run, then:
-    python3 docs/generate_size_charts.py size-latency-aws.csv size-latency-azure.csv
+    python3 scripts/generate_size_charts.py size-latency-aws.csv size-latency-azure.csv
 
 Output:
     docs/figures/size_vs_latency.png
