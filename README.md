@@ -55,10 +55,9 @@ scripts/
   kyverno_metrics.py                — Scrapes and deltas Kyverno's Prometheus histograms
   latency_report.py                 — Builds the latency artefact from a measurement run
   latency_analysis.py               — Mann-Whitney U, effect size and percentiles from requests.csv
-  latency_stats.py                  — Superseded by latency_analysis.py; pending removal
-  size_latency_stats.py             — Superseded by latency_analysis.py; pending removal
-  generate_charts.py                — Generates Phase 4 latency bar chart (run locally)
-  generate_size_charts.py           — Generates Phase 4b size/latency line chart (run locally)
+  latency_charts.py                 — ECDF + violin figures for both experiments (run locally)
+  set-failure-policy.sh             — Switches the cluster fail-open/fail-closed and verifies it took
+  webhook-state.sh                  — Prints the admission configuration an evidence run executed under
   local/
     install-tools.sh                — Installs cosign, syft, crane locally
     registry-login.sh               — Docker login for local use (dispatches on $CLOUD)
@@ -261,14 +260,24 @@ Two facts about the measurement that are easy to get wrong:
 
 ### Generating charts
 
+Both figures are drawn from `requests.csv` — the per-request file — rather than
+from the summary CSVs, because percentiles and distribution shape cannot be
+recovered from a summary:
+
 ```bash
 pip install matplotlib numpy
-python3 scripts/generate_charts.py latency-aws.csv
-python3 scripts/generate_size_charts.py size-latency-aws.csv
+python3 scripts/latency_charts.py \
+  --requests results/latency/aws-30692789440/latency-requests-aws.csv \
+  --preset policy --out results/latency/admission-latency-policy
+
+python3 scripts/latency_charts.py \
+  --requests results/latency/aws-30692789440/size-requests-aws.csv \
+  --preset size --out results/latency/admission-latency-size
 ```
 
-Note: the PNGs currently under `results/latency/` predate the corrected
-measurement and should be regenerated before use.
+Each writes a `.png` and a `.pdf`; the PDF is the one to `\includegraphics`. The
+statistics printed on the figure are computed by `latency_analysis.py`, not
+typed, so a figure cannot disagree with the tables.
 
 ### Attack simulations
 

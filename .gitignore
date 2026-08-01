@@ -24,6 +24,11 @@ memory.md
 changes.md
 HANDOFF.md
 
+# Python bytecode — scripts/latency_charts.py imports latency_analysis.py, which
+# makes CPython write scripts/__pycache__/ on every chart render.
+__pycache__/
+*.pyc
+
 # Test binary, built with `go test -c`
 *.test
 

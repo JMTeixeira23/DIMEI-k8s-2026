@@ -113,6 +113,37 @@ echo "════════════════════════�
 BEFORE="$(policy_webhooks)"
 echo "  before: ${BEFORE:-<none>}"
 
+# ── Are there any resource webhooks to verify at all? ────────────────────────
+# Kyverno registers a resource webhook only when a policy rule needs one, and it
+# omits the side of the `-ignore`/`-fail` pair that carries no rules. With no
+# ClusterPolicies registered there is therefore nothing named
+# `validate|mutate.kyverno.svc-*` in the cluster, and no amount of waiting will
+# produce one: the flag would flip, Kyverno would restart, and the verification
+# loop below would spend three minutes discovering that an empty set cannot
+# unanimously report ${WANT}.
+#
+# That is a different failure from "the webhooks disagree with what was asked",
+# and it is worth saying which one happened. Both bootstrap scripts and the
+# latency workflow's restore step leave the policies applied, so this should not
+# arise in an evidence sequence — but when it does, the run is unattributable for
+# a reason the operator can act on, and it should fail here rather than after the
+# upgrade.
+if [ -z "${BEFORE}" ]; then
+  POLICY_COUNT=$(kubectl get clusterpolicies -o name 2>/dev/null | wc -l | tr -d ' ')
+  if [ "${POLICY_COUNT}" = "0" ]; then
+    echo ""
+    echo "ERROR: no ClusterPolicies are registered, so Kyverno has published no"
+    echo "resource webhooks and the admission failure policy cannot be verified."
+    echo "Apply the policies first (bootstrap-<cloud>.sh step 6, or the pipeline),"
+    echo "then re-run this script. Refusing to switch a configuration that cannot"
+    echo "be read back — an evidence run under an unknown admission configuration"
+    echo "is worse than no evidence run."
+    exit 3
+  fi
+  echo "  note  : ${POLICY_COUNT} ClusterPolicies exist but no resource webhooks are"
+  echo "          published yet; Kyverno may still be registering them."
+fi
+
 # ── Already there? ───────────────────────────────────────────────────────────
 # A Helm upgrade that changes nothing is not free: it restarts the admission
 # controller, it takes a release lock, and on run 30703179531 it failed outright
@@ -187,8 +218,16 @@ record "${OBSERVED}" "${OK}" "helm-upgrade"
 
 if [ "${OK}" != "1" ]; then
   echo ""
-  echo "ERROR: Kyverno's resource webhooks did not all reach failurePolicy=${WANT}."
-  echo "Observed: ${OBSERVED:-<none>}"
+  if [ -z "${OBSERVED}" ]; then
+    echo "ERROR: Kyverno published no resource webhooks after the upgrade."
+    echo "ClusterPolicies present: $(kubectl get clusterpolicies -o name 2>/dev/null | wc -l | tr -d ' ')"
+    echo "This is not a disagreement about the failure policy — there is nothing"
+    echo "to disagree. Check that the policies are applied and that the admission"
+    echo "controller is running."
+  else
+    echo "ERROR: Kyverno's resource webhooks did not all reach failurePolicy=${WANT}."
+    echo "Observed: ${OBSERVED}"
+  fi
   echo "Refusing to continue — an evidence run under an unknown admission"
   echo "configuration is worse than no evidence run."
   exit 1

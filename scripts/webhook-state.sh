@@ -31,6 +31,18 @@
 #   configuration            "fail-open" | "fail-closed" | "mixed" | "unknown"
 #   policy_webhooks          the resource webhooks, as "name=failurePolicy"
 #   other_kyverno_webhooks   everything else Kyverno owns, same format
+#   clusterpolicy_count      why `policy_webhooks` may legitimately be empty
+#
+# WHY THE POLICY COUNT IS RECORDED
+#
+# Kyverno registers a resource webhook only when some policy rule needs one, and
+# it omits the side of the `-ignore`/`-fail` pair that carries no rules — which
+# is how the fail-open artefact of run 30703180555 came to list
+# `validate.kyverno.svc-ignore` with no `…-fail` entry beside it. The same
+# mechanism means that with *no* ClusterPolicies registered there are no resource
+# webhooks at all, and `configuration` is then `unknown` for a reason that has
+# nothing to do with the failure policy. Recording the count is what lets a
+# reader tell those two cases apart afterwards.
 #   webhook_timeout_seconds  the bound on how long admission stalls before the
 #                            failure policy decides the outcome
 #   pod_disruption_budgets   what protects the admission service during drains;
@@ -80,6 +92,9 @@ jq -n \
   --arg policy_webhooks "${POLICY_WEBHOOKS:-none}" \
   --arg other_webhooks "${OTHER_WEBHOOKS:-none}" \
   --arg timeouts "${TIMEOUTS:-unknown}" \
+  --arg clusterpolicies "$(kubectl get clusterpolicies \
+      -o jsonpath='{range .items[*]}{.metadata.name}{" "}{end}' 2>/dev/null \
+      | wc -w | tr -d ' ')" \
   --arg replicas "$(kubectl get deployment kyverno-admission-controller \
       -n "${KYVERNO_NS}" -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo unknown)" \
   --arg desired "$(kubectl get deployment kyverno-admission-controller \
@@ -88,6 +103,7 @@ jq -n \
       -o jsonpath='{range .items[*]}{.metadata.name}{"(minAvailable="}{.spec.minAvailable}{",allowed="}{.status.disruptionsAllowed}{") "}{end}' 2>/dev/null || true)" \
   '{configuration: $configuration,
     policy_webhooks: $policy_webhooks,
+    clusterpolicy_count: ($clusterpolicies | tonumber? // 0),
     other_kyverno_webhooks: $other_webhooks,
     webhook_timeout_seconds: $timeouts,
     kyverno_ready_replicas: $replicas,
