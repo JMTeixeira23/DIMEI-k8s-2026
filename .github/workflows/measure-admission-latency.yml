@@ -63,6 +63,17 @@ on:
         default: 'as-is'
         type: choice
         options: [as-is, ignore, fail]
+      condition_order:
+        description: >-
+          Optional explicit order for the policy matrix, e.g.
+          "baseline audit enforce". Leave blank to derive the order from the run
+          id. Set it to break the position confound: every run so far measured
+          enforce second and audit third, so the audit-vs-enforce difference
+          cannot be separated from measurement order. Recorded in the artefact
+          as order_source=explicit, so an artefact never claims to be randomised
+          when it was chosen.
+        required: false
+        default: ''
       # There is deliberately no cold-cache input. Kyverno v1.11.4 has no image
       # verification cache — confirmed from the running container's arguments,
       # and chart 3.1.4 exposes no such value — so there is no warm/cold split to
@@ -293,6 +304,7 @@ jobs:
           SETTLE_SECONDS: '30'
           WARMUP: '5'
           RANDOM_SEED: ${{ github.run_id }}
+          CONDITION_ORDER: ${{ inputs.condition_order }}
         run: bash scripts/run-latency-matrix.sh
 
       # ── Report ────────────────────────────────────────────────────────────

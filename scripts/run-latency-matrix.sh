@@ -144,6 +144,26 @@ if [ -n "${CONDITION_ORDER:-}" ]; then
   # never claims to be randomised when it was chosen.
   read -r -a ORDER <<< "${CONDITION_ORDER}"
   ORDER_SOURCE="explicit"
+
+  # Validate before anything is measured. An unknown or missing condition would
+  # otherwise surface inside the loop, after the cluster has already been
+  # reconfigured and part of the matrix measured — a wasted run for a typo.
+  if [ "${#ORDER[@]}" -ne "${#CONDITIONS[@]}" ]; then
+    echo "ERROR: CONDITION_ORDER lists ${#ORDER[@]} conditions, expected ${#CONDITIONS[@]}." >&2
+    echo "       got: '${CONDITION_ORDER}'" >&2
+    echo "       expected a permutation of: ${CONDITIONS[*]}" >&2
+    exit 2
+  fi
+  for want in "${CONDITIONS[@]}"; do
+    found=0
+    for got in "${ORDER[@]}"; do [ "${got}" = "${want}" ] && found=1; done
+    if [ "${found}" != "1" ]; then
+      echo "ERROR: CONDITION_ORDER is missing '${want}'." >&2
+      echo "       got: '${CONDITION_ORDER}'" >&2
+      echo "       expected a permutation of: ${CONDITIONS[*]}" >&2
+      exit 2
+    fi
+  done
 else
   ORDER_STR=$(python3 -c "import random,sys; c=list(sys.argv[2:]); random.Random(int(sys.argv[1])).shuffle(c); print(' '.join(c))" \
     "${RANDOM_SEED}" "${CONDITIONS[@]}")
