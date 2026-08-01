@@ -49,36 +49,11 @@ if [ ! -f "${REQUESTS_CSV}" ]; then
 fi
 
 # ── Probe manifest ────────────────────────────────────────────────────────────
-# nodeSelector matches no node in either cluster, so the pod is admitted and then
-# stays Pending forever. Nothing is pulled and nothing is scheduled.
-probe_manifest() {
-  cat <<YAML
-apiVersion: v1
-kind: Pod
-metadata:
-  name: ${1}
-  namespace: ${NAMESPACE}
-  labels:
-    experiment: admission-latency
-    condition: ${CONDITION}
-spec:
-  restartPolicy: Never
-  nodeSelector:
-    kyverno-admission-latency-probe: "never-schedules"
-  containers:
-    - name: probe
-      image: ${IMAGE}
-      command: ["sh", "-c", "exit 0"]
-YAML
-}
-
-create_probe() {  # <pod-name> — echoes "true"/"false" for admitted
-  if probe_manifest "$1" | kubectl create -f - >/dev/null 2>&1; then
-    echo "true"
-  else
-    echo "false"
-  fi
-}
+# Defined in probe-lib.sh, shared with the concurrency sweep so that both
+# experiments measure admission of the same kind of object. See that file for why
+# the probe is unschedulable and why the namespace matters.
+# shellcheck source=probe-lib.sh
+source "${HERE}/probe-lib.sh"
 
 echo "════════════════════════════════════════════════════════════"
 echo "  Condition: ${CONDITION}   group: ${GROUP}"
@@ -91,7 +66,7 @@ echo "════════════════════════�
 # one-off costs — registry client setup, TLS handshakes, and any first-use cache
 # population — that are not representative of steady-state admission.
 for i in $(seq 1 "${WARMUP}"); do
-  create_probe "lat-${CONDITION}-warmup-${i}" >/dev/null
+  create_probe "lat-${CONDITION}-warmup-${i}" "${CONDITION}" "${IMAGE}" >/dev/null
 done
 echo "Warm-up complete (${WARMUP} requests, not counted)"
 
@@ -104,7 +79,7 @@ DENIED=0
 for i in $(seq 1 "${ITERATIONS}"); do
   POD="lat-${CONDITION}-${i}"
   START=$(date +%s%3N)
-  ACCEPTED=$(create_probe "${POD}")
+  ACCEPTED=$(create_probe "${POD}" "${CONDITION}" "${IMAGE}")
   END=$(date +%s%3N)
 
   echo "${CONDITION},${GROUP},${i},$((END - START)),${ACCEPTED}" >> "${REQUESTS_CSV}"
@@ -157,6 +132,5 @@ echo "Admissions seen by Kyverno in ${NAMESPACE}: ${FILTERED_N}"
 
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 # After the closing snapshot, so deletions never land inside the measured window.
-kubectl delete pods -n "${NAMESPACE}" \
-  -l experiment=admission-latency --wait=false >/dev/null 2>&1 || true
+probe_cleanup "${NAMESPACE}"
 echo "Probe pods deleted"

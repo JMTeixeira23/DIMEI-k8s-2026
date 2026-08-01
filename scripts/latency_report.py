@@ -184,6 +184,10 @@ def main():
     # reported as zero, and anything unrecognised keeps its measured position.
     known_order = ["baseline", "audit", "enforce", "enforce-nocache",
                    "size-small", "size-medium", "size-large", "size-xlarge"]
+    # Concurrency levels sort numerically because the condition name is
+    # zero-padded (conc-001 … conc-050); appending them here keeps the sweep in
+    # ascending order in the report regardless of the order measured.
+    known_order += sorted(c for c in sent if c.startswith("conc-"))
     measured = [c for c in known_order if c in sent]
     measured += [c for c in sent if c not in known_order]
 

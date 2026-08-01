@@ -63,6 +63,18 @@ on:
         default: 'as-is'
         type: choice
         options: [as-is, ignore, fail]
+      concurrency_levels:
+        description: >-
+          Revision item 1.4. Space-separated concurrency levels to sweep, e.g.
+          "1 5 10 25 50". Blank (the default) skips the sweep entirely, so
+          existing runs are unaffected. Each level sends the same number of
+          requests, delivered in batches of N in parallel.
+        required: false
+        default: ''
+      concurrency_requests:
+        description: 'Requests per concurrency level (default: 50)'
+        required: false
+        default: '50'
       condition_order:
         description: >-
           Optional explicit order for the policy matrix, e.g.
@@ -298,7 +310,14 @@ jobs:
       # webhook re-registration that follows a policy change, and its tail is
       # then a property of its position rather than of the condition.
 
+      # `iterations: 0` skips the matrix entirely, mirroring how the size job is
+      # skipped by `size_iterations: 0`. Without this the matrix would still
+      # delete and re-apply the policies for each condition, record nothing, and
+      # then fail the report step with "no requests were recorded" — taking the
+      # concurrency sweep down with it, since later steps do not run after a
+      # failed one. Needed to run the sweep on its own.
       - name: Measure the baseline / audit / enforce matrix
+        if: ${{ inputs.iterations != '0' }}
         env:
           ITERATIONS: ${{ inputs.iterations }}
           SETTLE_SECONDS: '30'
@@ -310,7 +329,7 @@ jobs:
       # ── Report ────────────────────────────────────────────────────────────
 
       - name: Build the latency artefact
-        if: always()
+        if: ${{ always() && inputs.iterations != '0' }}
         run: |
           python3 scripts/latency_report.py \
             --results-dir "${RESULTS_DIR}" \
@@ -319,7 +338,7 @@ jobs:
             --csv "latency-${CLOUD}.csv"
 
       - name: Upload latency artefact
-        if: always()
+        if: ${{ always() && inputs.iterations != '0' }}
         uses: actions/upload-artifact@v4
         with:
           name: latency-${{ matrix.cloud }}
@@ -347,6 +366,85 @@ jobs:
           kubectl delete pods -n "${NAMESPACE}" \
             -l experiment=admission-latency --wait=false 2>/dev/null || true
           kubectl get clusterpolicies -o wide || true
+
+      # ── Concurrency sweep (revision item 1.4) ─────────────────────────────
+      # Runs after the restore above, so the policies are in Enforce — the
+      # configuration actually deployed, and the only one where the question is
+      # interesting. Lives in this job rather than its own because it needs the
+      # same kubeconfig and the same resolved probe image; a fourth job would
+      # duplicate the auth preamble to no benefit.
+      #
+      # Skipped unless levels are requested, so existing runs are unaffected.
+
+      - name: Measure admission under concurrency
+        if: ${{ inputs.concurrency_levels != '' }}
+        env:
+          RESULTS_DIR: /tmp/concurrency-results
+          SETTLE_SECONDS: '10'
+          WARMUP: '5'
+        run: |
+          set -euo pipefail
+          for P in verify-image-signature verify-sbom-cyclonedx verify-slsa-provenance; do
+            ACTION=$(kubectl get clusterpolicy "$P" \
+              -o jsonpath='{.spec.validationFailureAction}' 2>/dev/null || true)
+            if [ "${ACTION:-MISSING}" != "Enforce" ]; then
+              echo "ERROR: the concurrency sweep requires all policies in Enforce; $P is ${ACTION:-MISSING}."
+              exit 1
+            fi
+          done
+
+          mkdir -p "${RESULTS_DIR}"
+          jq -n \
+            --arg cloud "${CLOUD}" \
+            --arg image "${PROBE_IMAGE}" \
+            --arg levels "${{ inputs.concurrency_levels }}" \
+            --arg requests "${{ inputs.concurrency_requests }}" \
+            --arg namespace "${NAMESPACE}" \
+            --arg run_url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --arg generated "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg runner "$(nproc) vCPU, $(free -m | awk '/^Mem:/{print $2}') MB" \
+            --argjson admission "$(bash scripts/webhook-state.sh)" \
+            '{cloud: $cloud, probe_image: $image, probe_namespace: $namespace,
+              experiment: "admission cost under concurrent pod creation",
+              concurrency_levels: $levels, requests_per_level: $requests,
+              runner: $runner, admission: $admission,
+              run_url: $run_url, generated: $generated}' \
+            > "${RESULTS_DIR}/_environment.json"
+
+          bash scripts/measure-concurrency.sh \
+            "${PROBE_IMAGE}" \
+            "${{ inputs.concurrency_levels }}" \
+            "${{ inputs.concurrency_requests }}"
+
+      - name: Build the concurrency artefact
+        if: ${{ always() && inputs.concurrency_levels != '' }}
+        env:
+          RESULTS_DIR: /tmp/concurrency-results
+        run: |
+          python3 scripts/latency_report.py \
+            --results-dir "${RESULTS_DIR}" \
+            --cloud "${CLOUD}" \
+            --out "concurrency-${CLOUD}.json" \
+            --csv "concurrency-${CLOUD}.csv"
+
+      - name: Upload concurrency artefact
+        if: ${{ always() && inputs.concurrency_levels != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: concurrency-${{ matrix.cloud }}
+          path: |
+            concurrency-*.json
+            concurrency-*.csv
+            /tmp/concurrency-results/requests.csv
+            /tmp/concurrency-results/_concurrency.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Cleanup concurrency probes
+        if: ${{ always() && inputs.concurrency_levels != '' }}
+        run: |
+          kubectl delete pods -n "${NAMESPACE}" \
+            -l experiment=admission-latency --wait=false 2>/dev/null || true
 
   # ───────────────────────────────────────────────────────────────────────────
   # IMAGE SIZE vs ADMISSION COST
