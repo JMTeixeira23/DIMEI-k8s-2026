@@ -1,13 +1,40 @@
 name: Measure Admission Latency
 
 # ─────────────────────────────────────────────────────────────────────────────
-# GENERIC LATENCY MEASUREMENT — runs on AWS EKS, Azure AKS, or both.
+# ADMISSION LATENCY MEASUREMENT — runs on AWS EKS, Azure AKS, or both.
 # Not part of the CD pipeline — run manually to collect thesis data.
 #
-# Measures Kyverno admission overhead across three conditions:
-#   baseline  — policies deleted (no Kyverno overhead)
-#   audit     — policies in Audit mode
-#   enforce   — policies in Enforce mode
+# Measures what the Kyverno admission webhook costs, across three conditions
+# that differ in exactly one variable:
+#
+#   baseline  — the three ClusterPolicies are absent
+#   audit     — the same policies, validationFailureAction: Audit
+#   enforce   — the same policies, validationFailureAction: Enforce
+#
+# Optionally a fourth, if this Kyverno version supports it:
+#   enforce-nocache — enforce with the image verification cache disabled, which
+#                     isolates the Rekor round trip. Support is detected at run
+#                     time and recorded either way; nothing is assumed.
+#
+# Everything else — mutateDigest, verifyDigest, attestors, the image under test —
+# is held constant, and matches what the pipeline actually deploys.
+#
+# METHOD
+#
+# Probe pods are created in supply-chain-demo, the namespace the policies match,
+# and carry a nodeSelector no node satisfies. Admission runs in full because it
+# happens at create time; scheduling, image pull and container execution never
+# happen. Two views are recorded per condition: Kyverno's own histograms as
+# delta_sum/delta_count summed across all admission replicas (the authoritative
+# mean), and client-side wall clock per request (the only per-request sample,
+# used for distributions). See scripts/measure-admission.sh.
+#
+# WHAT THIS REPLACES
+#
+# The previous version created every probe in the `default` namespace, which no
+# policy matches, and timed pod completion rather than admission. It therefore
+# measured pod pull and scheduling with the policies never evaluated. Every
+# Phase 4 and Phase 4b number produced before 2026-08-01 is void.
 # ─────────────────────────────────────────────────────────────────────────────
 
 on:
@@ -16,20 +43,25 @@ on:
       cloud:
         description: 'Which cloud(s) to measure'
         required: true
-        default: 'both'
+        default: 'aws'
         type: choice
-        options:
-          - both
-          - aws
-          - azure
+        options: [both, aws, azure]
       iterations:
-        description: 'Pods per condition (default: 30)'
+        description: 'Admission requests per condition (default: 30)'
         required: false
         default: '30'
       size_iterations:
-        description: 'Pods per image size — size experiment (default: 20)'
+        description: 'Requests per image size — size experiment (default: 20)'
         required: false
         default: '20'
+      measure_cold_cache:
+        description: >-
+          Also measure with the image verification cache disabled, to isolate the
+          Rekor round trip. Skipped automatically if this Kyverno version has no
+          such flag. Patches the admission deployment and reverts it afterwards.
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   id-token: write
@@ -47,35 +79,31 @@ jobs:
     steps:
       - id: set-matrix
         run: |
-          if [ "${{ inputs.cloud }}" = "both" ]; then
+          CLOUD="${{ inputs.cloud }}"
+          if [ -z "${CLOUD}" ] || [ "${CLOUD}" = "both" ]; then
             echo 'matrix={"include":[{"cloud":"aws"},{"cloud":"azure"}]}' >> $GITHUB_OUTPUT
-          elif [ "${{ inputs.cloud }}" = "aws" ]; then
-            echo 'matrix={"include":[{"cloud":"aws"}]}' >> $GITHUB_OUTPUT
           else
-            echo 'matrix={"include":[{"cloud":"azure"}]}' >> $GITHUB_OUTPUT
+            echo "matrix={\"include\":[{\"cloud\":\"${CLOUD}\"}]}" >> $GITHUB_OUTPUT
           fi
+
   measure:
     name: Latency (${{ matrix.cloud }})
     runs-on: ubuntu-latest
     environment: ${{ matrix.cloud }}
-    needs: setup  
+    needs: setup
 
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.setup.outputs.matrix) }}
 
+    env:
+      CLOUD: ${{ matrix.cloud }}
+      NAMESPACE: supply-chain-demo
+      RESULTS_DIR: /tmp/latency-results
+
     steps:
       - name: Checkout
         uses: actions/checkout@v5
-
-      - name: Check cloud selection
-        run: |
-          SELECTED="${{ inputs.cloud }}"
-          THIS="${{ matrix.cloud }}"
-          if [ "${SELECTED}" != "both" ] && [ "${SELECTED}" != "${THIS}" ]; then
-            echo "Skipping ${THIS} — selected: ${SELECTED}"
-            exit 0
-          fi
 
       # ── Auth ──────────────────────────────────────────────────────────────
 
@@ -95,8 +123,6 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      # ── Registry login ────────────────────────────────────────────────────
-
       - name: Registry login — ECR
         if: matrix.cloud == 'aws'
         id: ecr-login
@@ -105,8 +131,6 @@ jobs:
       - name: Registry login — ACR
         if: matrix.cloud == 'azure'
         run: az acr login --name "${{ secrets.ACR_LOGIN_SERVER }}"
-
-      # ── Kubeconfig ────────────────────────────────────────────────────────
 
       - name: Kubeconfig — EKS
         if: matrix.cloud == 'aws'
@@ -123,220 +147,268 @@ jobs:
             --name "${{ secrets.AKS_CLUSTER_NAME }}" \
             --overwrite-existing
 
-      # ── Get latest signed image ───────────────────────────────────────────
+      # ── Resolve the image under test ──────────────────────────────────────
+      # By digest, matching how the pipeline's TC-01 and the attack simulations
+      # deploy. A tag reference would add a registry resolution to every request
+      # and measure something the deployed configuration does not do.
 
-      - name: Get latest signed image (AWS)
-        if: matrix.cloud == 'aws'
+      - name: Resolve the signed image by digest
         run: |
-          LATEST_TAG=$(aws ecr describe-images \
-            --repository-name "${{ secrets.ECR_REPO_NAME }}" \
-            --region "${{ secrets.AWS_REGION }}" \
-            --output json \
-            | jq -r '
-                .imageDetails
-                | map(select(.imageTags != null))
-                | map(select(.imageTags[] | test("^sha256") | not))
-                | map(select(.imageTags[] | test("-")))
-                | map(select(.imageTags[] | test("^(attack|size-)") | not))
-                | sort_by(.imagePushedAt)
-                | last
-                | .imageTags[0]
-              ')
-          REGISTRY="${{ steps.ecr-login.outputs.registry }}"
-          echo "SIGNED_IMAGE=${REGISTRY}/${{ secrets.ECR_REPO_NAME }}:${LATEST_TAG}" >> $GITHUB_ENV
-          echo "Latest image: ${SIGNED_IMAGE}"
+          set -euo pipefail
+          if [ "${CLOUD}" = "aws" ]; then
+            REGISTRY="${{ steps.ecr-login.outputs.registry }}"
+            REPO="${{ secrets.ECR_REPO_NAME }}"
+            TAG=$(aws ecr describe-images \
+              --repository-name "${REPO}" \
+              --region "${{ secrets.AWS_REGION }}" \
+              --output json \
+              | jq -r '
+                  .imageDetails
+                  | map(select(.imageTags != null))
+                  | map(select(.imageTags[] | test("^sha256") | not))
+                  | map(select(.imageTags[] | test("-")))
+                  | map(select(.imageTags[] | test("^(attack|size-|tc04|lat-)") | not))
+                  | sort_by(.imagePushedAt) | last | .imageTags[0]')
+            DIGEST=$(aws ecr describe-images \
+              --repository-name "${REPO}" \
+              --region "${{ secrets.AWS_REGION }}" \
+              --image-ids imageTag="${TAG}" \
+              --query 'imageDetails[0].imageDigest' --output text)
+          else
+            REGISTRY="${{ secrets.ACR_LOGIN_SERVER }}"
+            REPO="${{ secrets.ACR_REPO_NAME }}"
+            TAG=$(az acr repository show-tags \
+              --name "${REGISTRY}" --repository "${REPO}" \
+              --orderby time_desc --output tsv \
+              | grep -E '^[a-f0-9]+-[0-9]+$' \
+              | grep -vE '^(attack|size-|tc04|lat-)' | head -1)
+            DIGEST=$(az acr repository show \
+              --name "${REGISTRY}" --image "${REPO}:${TAG}" \
+              --query digest --output tsv)
+          fi
 
-      - name: Get latest signed image (Azure)
-        if: matrix.cloud == 'azure'
+          echo "PROBE_IMAGE=${REGISTRY}/${REPO}@${DIGEST}" >> $GITHUB_ENV
+          echo "Image under test: ${REGISTRY}/${REPO}@${DIGEST}  (tag ${TAG})"
+
+      # ── Preflight ─────────────────────────────────────────────────────────
+
+      - name: Preflight — record the environment being measured
+        id: preflight
         run: |
-          LATEST_TAG=$(az acr repository show-tags \
-            --name "${{ secrets.ACR_LOGIN_SERVER }}" \
-            --repository "${{ secrets.ACR_REPO_NAME }}" \
-            --orderby time_desc \
-            --output tsv \
-            | grep -E '^[a-f0-9]+-[0-9]+$' \
-            | grep -vE '^(attack|size-)' \
-            | head -1)
-          echo "SIGNED_IMAGE=${{ secrets.ACR_LOGIN_SERVER }}/${{ secrets.ACR_REPO_NAME }}:${LATEST_TAG}" >> $GITHUB_ENV
-          echo "Latest image: ${SIGNED_IMAGE}"
+          set -euo pipefail
+          mkdir -p "${RESULTS_DIR}"
 
-      # ── Save and delete policies (baseline measurement) ───────────────────
+          kubectl create namespace "${NAMESPACE}" \
+            --dry-run=client -o yaml | kubectl apply -f -
 
-      - name: Save policies and delete for baseline
+          KYVERNO_IMAGE=$(kubectl get deployment kyverno-admission-controller -n kyverno \
+            -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || true)
+          REPLICAS=$(kubectl get deployment kyverno-admission-controller -n kyverno \
+            -o jsonpath='{.status.readyReplicas}' 2>/dev/null || true)
+          ARGS=$(kubectl get deployment kyverno-admission-controller -n kyverno \
+            -o jsonpath='{.spec.template.spec.containers[0].args}' 2>/dev/null || true)
+          WEBHOOKS=$(kubectl get mutatingwebhookconfigurations -o json 2>/dev/null \
+            | jq -r '[.items[] | select(.metadata.name | test("kyverno"))
+                      | .webhooks[] | "\(.name)=\(.failurePolicy)"] | join(" ")' || true)
+
+          # Does this Kyverno build know about the image verification cache?
+          # Recorded as an observation, never assumed: the flag arrived in a
+          # later release than the chart pinned here may install.
+          CACHE_FLAG="unknown"
+          if printf '%s' "${ARGS}" | grep -q "imageVerifyCache"; then
+            CACHE_FLAG="present-in-args"
+          elif kubectl exec -n kyverno deploy/kyverno-admission-controller -- \
+                 /kyverno --help 2>&1 | grep -qi "imageVerifyCache"; then
+            CACHE_FLAG="supported"
+          else
+            CACHE_FLAG="not-supported"
+          fi
+          echo "cache_flag=${CACHE_FLAG}" >> $GITHUB_OUTPUT
+
+          jq -n \
+            --arg cloud "${CLOUD}" \
+            --arg image "${PROBE_IMAGE}" \
+            --arg kyverno_image "${KYVERNO_IMAGE:-unknown}" \
+            --arg replicas "${REPLICAS:-unknown}" \
+            --arg args "${ARGS:-unknown}" \
+            --arg webhooks "${WEBHOOKS:-unknown}" \
+            --arg cache_flag "${CACHE_FLAG}" \
+            --arg context "$(kubectl config current-context)" \
+            --arg namespace "${NAMESPACE}" \
+            --arg run_url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --arg generated "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{cloud: $cloud, probe_image: $image, kyverno_image: $kyverno_image,
+              kyverno_ready_replicas: $replicas, admission_controller_args: $args,
+              mutating_webhook_failure_policies: $webhooks,
+              image_verify_cache_flag: $cache_flag, kubectl_context: $context,
+              probe_namespace: $namespace, run_url: $run_url, generated: $generated}' \
+            > "${RESULTS_DIR}/_environment.json"
+
+          cat "${RESULTS_DIR}/_environment.json"
+          echo ""
+          echo "Image verification cache flag: ${CACHE_FLAG}"
+
+      # ── Condition 1: baseline ─────────────────────────────────────────────
+
+      - name: Baseline — remove the policies
         run: |
-          mkdir -p /tmp/policies-backup
-          kubectl get clusterpolicy \
-            verify-image-signature \
-            verify-sbom-cyclonedx \
-            verify-slsa-provenance \
-            -o yaml > /tmp/policies-backup/all-policies.yaml 2>/dev/null || true
-
+          set -euo pipefail
           kubectl delete clusterpolicy \
-            verify-image-signature \
-            verify-sbom-cyclonedx \
-            verify-slsa-provenance \
+            verify-image-signature verify-sbom-cyclonedx verify-slsa-provenance \
             --ignore-not-found
+          sleep 15   # let Kyverno deregister its resource webhooks
+          kubectl get clusterpolicies -o wide 2>/dev/null || echo "(none — as intended)"
 
-          # Wait for webhooks to deregister
-          sleep 10
-          echo "✅ Policies removed — baseline measurement ready"
+      - name: Baseline — measure
+        run: bash scripts/measure-admission.sh baseline "${PROBE_IMAGE}" "${{ inputs.iterations }}"
 
-      # ── Measure function ──────────────────────────────────────────────────
+      # ── Condition 2: audit ────────────────────────────────────────────────
+      # Only validationFailureAction differs from the deployed policies. The old
+      # workflow also rewrote mutateDigest/verifyDigest between conditions, which
+      # confounded the failure action with digest mutation and measured a
+      # configuration that is never deployed.
 
-      - name: Measure baseline latency (no policies)
+      - name: Audit — apply the policies in Audit mode
         run: |
-          N=${{ github.event.inputs.iterations }}
-          echo "condition,latency_ms" > /tmp/baseline.csv
-
-          for i in $(seq 1 ${N}); do
-            kubectl delete pod latency-probe --ignore-not-found 2>/dev/null
-            kubectl wait pod/latency-probe --for=delete --timeout=30s 2>/dev/null || true
-
-            START=$(date +%s%3N)
-            kubectl run latency-probe \
-              --image="${SIGNED_IMAGE}" \
-              --restart=Never \
-              --command -- sh -c 'exit 0' 2>/dev/null
-
-            for j in $(seq 1 20); do
-              PHASE=$(kubectl get pod latency-probe \
-                -o jsonpath='{.status.phase}' 2>/dev/null || echo "Pending")
-              if [ "${PHASE}" = "Succeeded" ] || [ "${PHASE}" = "Failed" ]; then break; fi
-              sleep 0.5
-            done
-            END=$(date +%s%3N)
-
-            echo "baseline,$((END - START))" >> /tmp/baseline.csv
-            sleep 1
-          done
-
-          echo "✅ Baseline done (${N} iterations)"
-
-      - name: Restore policies in Audit mode
-        run: |
-          REGISTRY_VAL=$(grep '^REGISTRY=' policies/values/${{ matrix.cloud }}.env \
-            | cut -d= -f2)
+          set -euo pipefail
+          REGISTRY_VAL=$(grep '^REGISTRY=' policies/values/${CLOUD}.env | cut -d= -f2)
           mkdir -p /tmp/kyverno-audit
           for f in policies/verify-*.yaml; do
             sed "s|REGISTRY_PLACEHOLDER|${REGISTRY_VAL}|g" "$f" \
               | sed "s/validationFailureAction: .*/validationFailureAction: Audit/" \
-              | sed "s/mutateDigest: .*/mutateDigest: false/" \
-              | sed "s/verifyDigest: .*/verifyDigest: false/" \
               > "/tmp/kyverno-audit/$(basename $f)"
           done
           kubectl apply --server-side --force-conflicts -f /tmp/kyverno-audit/
-          sleep 10
-          echo "✅ Policies in Audit mode"
+          sleep 15
+          kubectl get clusterpolicies -o wide
 
-      - name: Measure audit latency
+      - name: Audit — measure
+        run: bash scripts/measure-admission.sh audit "${PROBE_IMAGE}" "${{ inputs.iterations }}"
+
+      # ── Condition 3: enforce ──────────────────────────────────────────────
+
+      - name: Enforce — apply the policies exactly as deployed
         run: |
-          N=${{ github.event.inputs.iterations }}
-          echo "condition,latency_ms" > /tmp/audit.csv
-
-          for i in $(seq 1 ${N}); do
-            kubectl delete pod latency-probe --ignore-not-found 2>/dev/null
-            kubectl wait pod/latency-probe --for=delete --timeout=30s 2>/dev/null || true
-
-            START=$(date +%s%3N)
-            kubectl run latency-probe \
-              --image="${SIGNED_IMAGE}" \
-              --restart=Never \
-              --command -- sh -c 'exit 0' 2>/dev/null
-
-            for j in $(seq 1 20); do
-              PHASE=$(kubectl get pod latency-probe \
-                -o jsonpath='{.status.phase}' 2>/dev/null || echo "Pending")
-              if [ "${PHASE}" = "Succeeded" ] || [ "${PHASE}" = "Failed" ]; then break; fi
-              sleep 0.5
-            done
-            END=$(date +%s%3N)
-
-            echo "audit,$((END - START))" >> /tmp/audit.csv
-            sleep 1
-          done
-          echo "✅ Audit done (${N} iterations)"
-
-      - name: Switch policies to Enforce mode
-        run: |
-          REGISTRY_VAL=$(grep '^REGISTRY=' policies/values/${{ matrix.cloud }}.env \
-            | cut -d= -f2)
+          set -euo pipefail
+          REGISTRY_VAL=$(grep '^REGISTRY=' policies/values/${CLOUD}.env | cut -d= -f2)
           mkdir -p /tmp/kyverno-enforce
           for f in policies/verify-*.yaml; do
             sed "s|REGISTRY_PLACEHOLDER|${REGISTRY_VAL}|g" "$f" \
-              | sed "s/validationFailureAction: .*/validationFailureAction: Enforce/" \
-              | sed "s/mutateDigest: .*/mutateDigest: true/" \
-              | sed "s/verifyDigest: .*/verifyDigest: true/" \
               > "/tmp/kyverno-enforce/$(basename $f)"
           done
           kubectl apply --server-side --force-conflicts -f /tmp/kyverno-enforce/
-          sleep 10
-          echo "✅ Policies in Enforce mode"
+          sleep 15
+          kubectl get clusterpolicies -o wide
 
-      - name: Measure enforce latency
+      - name: Enforce — measure
+        run: bash scripts/measure-admission.sh enforce "${PROBE_IMAGE}" "${{ inputs.iterations }}"
+
+      # ── Condition 4 (optional): enforce with the verification cache off ───
+      # Only runs when asked for AND when this Kyverno version has the flag.
+      # The flag is not exposed by chart 3.1.4, so it has to be patched onto the
+      # deployment — which hands the `kubectl-patch` field manager ownership of
+      # .args and will make the next `helm upgrade` conflict under Helm 4. The
+      # revert step below restores the args, and the run log says so explicitly.
+
+      - name: Enforce (cold cache) — disable the verification cache
+        id: nocache-on
+        if: ${{ inputs.measure_cold_cache && steps.preflight.outputs.cache_flag != 'not-supported' }}
         run: |
-          N=${{ github.event.inputs.iterations }}
-          echo "condition,latency_ms" > /tmp/enforce.csv
+          set -euo pipefail
+          kubectl patch deployment kyverno-admission-controller -n kyverno --type=json \
+            -p='[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--imageVerifyCacheEnabled=false"}]'
+          kubectl rollout status deployment/kyverno-admission-controller -n kyverno --timeout=300s
+          sleep 15
+          echo "patched=true" >> $GITHUB_OUTPUT
+          echo "NOTE: the admission deployment now carries a kubectl-patch field"
+          echo "manager on .args. The revert step restores it; if a later helm"
+          echo "upgrade still conflicts, delete the deployment and re-run bootstrap."
 
-          for i in $(seq 1 ${N}); do
-            kubectl delete pod latency-probe --ignore-not-found 2>/dev/null
-            kubectl wait pod/latency-probe --for=delete --timeout=30s 2>/dev/null || true
+      - name: Enforce (cold cache) — measure
+        if: ${{ steps.nocache-on.outputs.patched == 'true' }}
+        run: bash scripts/measure-admission.sh enforce-nocache "${PROBE_IMAGE}" "${{ inputs.iterations }}"
 
-            START=$(date +%s%3N)
-            kubectl run latency-probe \
-              --image="${SIGNED_IMAGE}" \
-              --restart=Never \
-              --command -- sh -c 'exit 0' 2>/dev/null
-
-            for j in $(seq 1 20); do
-              PHASE=$(kubectl get pod latency-probe \
-                -o jsonpath='{.status.phase}' 2>/dev/null || echo "Pending")
-              if [ "${PHASE}" = "Succeeded" ] || [ "${PHASE}" = "Failed" ]; then break; fi
-              sleep 0.5
-            done
-            END=$(date +%s%3N)
-
-            echo "enforce,$((END - START))" >> /tmp/enforce.csv
-            sleep 1
-          done
-          echo "✅ Enforce done (${N} iterations)"
-
-      # ── Aggregate results ─────────────────────────────────────────────────
-
-      - name: Compute statistics and print results
-        env:
-          CLOUD: ${{ matrix.cloud }}
-          ITERATIONS: ${{ github.event.inputs.iterations }}
+      - name: Enforce (cold cache) — restore the cache setting
+        if: ${{ always() && steps.nocache-on.outputs.patched == 'true' }}
         run: |
-          grep -h -v "^condition" /tmp/baseline.csv /tmp/audit.csv /tmp/enforce.csv \
-            | grep -v "^$" > /tmp/all-raw.csv
-          echo "=== raw CSV preview ===" && head -6 /tmp/all-raw.csv
-          python3 scripts/latency_stats.py
+          ARGS=$(kubectl get deployment kyverno-admission-controller -n kyverno \
+            -o json | jq '[.spec.template.spec.containers[0].args[]
+                           | select(. != "--imageVerifyCacheEnabled=false")]')
+          kubectl patch deployment kyverno-admission-controller -n kyverno --type=json \
+            -p="[{\"op\":\"replace\",\"path\":\"/spec/template/spec/containers/0/args\",\"value\":${ARGS}}]"
+          kubectl rollout status deployment/kyverno-admission-controller -n kyverno --timeout=300s
+          echo "Verification cache setting restored"
 
-      - name: Upload latency CSV
+      - name: Record that the cold-cache condition was skipped
+        if: ${{ inputs.measure_cold_cache && steps.preflight.outputs.cache_flag == 'not-supported' }}
+        run: |
+          echo "Cold-cache condition requested but this Kyverno build has no"
+          echo "image verification cache flag (${{ steps.preflight.outputs.cache_flag }})."
+          echo "Every admission therefore pays the full verification path,"
+          echo "including the Rekor round trip — there is no warm/cold split to"
+          echo "isolate on this version. Recorded in the artefact."
+
+      # ── Report ────────────────────────────────────────────────────────────
+
+      - name: Build the latency artefact
+        if: always()
+        run: |
+          python3 scripts/latency_report.py \
+            --results-dir "${RESULTS_DIR}" \
+            --cloud "${CLOUD}" \
+            --out "latency-${CLOUD}.json" \
+            --csv "latency-${CLOUD}.csv"
+
+      - name: Upload latency artefact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: latency-${{ matrix.cloud }}
-          path: /tmp/latency-${{ matrix.cloud }}.csv
-          retention-days: 30
+          path: |
+            latency-*.json
+            latency-*.csv
+            /tmp/latency-results/requests.csv
+          if-no-files-found: error
+          retention-days: 90
 
-      - name: Cleanup probe pod
+      # ── Restore ───────────────────────────────────────────────────────────
+      # The cluster must be left enforcing, whatever happened above: the attack
+      # simulations and the pipeline both assume Enforce.
+
+      - name: Restore the deployed policy configuration
         if: always()
-        run: kubectl delete pod latency-probe --ignore-not-found
+        run: |
+          REGISTRY_VAL=$(grep '^REGISTRY=' policies/values/${CLOUD}.env | cut -d= -f2)
+          mkdir -p /tmp/kyverno-restore
+          for f in policies/verify-*.yaml; do
+            sed "s|REGISTRY_PLACEHOLDER|${REGISTRY_VAL}|g" "$f" \
+              > "/tmp/kyverno-restore/$(basename $f)"
+          done
+          kubectl apply --server-side --force-conflicts -f /tmp/kyverno-restore/ || true
+          kubectl delete pods -n "${NAMESPACE}" \
+            -l experiment=admission-latency --wait=false 2>/dev/null || true
+          kubectl get clusterpolicies -o wide || true
 
-  # ─────────────────────────────────────────────────────────────────────────────
-
-  # ─────────────────────────────────────────────────────────────────────────────
-  # JOB 2 — IMAGE SIZE vs ADMISSION LATENCY
-  # Hypothesis: Kyverno admission cost is O(1) w.r.t. image size.
-  # Kyverno verifies the digest against Rekor — it never pulls image layers.
-  # Four images: small (~5MB), medium (~30MB), large (~120MB), xlarge (~400MB)
-  # ─────────────────────────────────────────────────────────────────────────────
+  # ───────────────────────────────────────────────────────────────────────────
+  # IMAGE SIZE vs ADMISSION COST
+  #
+  # Hypothesis: admission cost is O(1) in image size, because Kyverno verifies
+  # signatures and attestations against the registry and Rekor without pulling
+  # image layers.
+  #
+  # The previous version could not test this: its probes ran in `default`, so no
+  # verification happened at any size, and it timed pod completion, which is
+  # dominated by the image pull the hypothesis says Kyverno avoids. A flat line
+  # was guaranteed regardless of whether the hypothesis holds. Here the probes
+  # are unschedulable and in the policy-matched namespace, so nothing is pulled
+  # by the probe and the only work measured is verification.
+  # ───────────────────────────────────────────────────────────────────────────
 
   build-size-images:
     name: Build Size Images (${{ matrix.cloud }})
     runs-on: ubuntu-latest
     environment: ${{ matrix.cloud }}
-    needs: [setup, measure] 
+    needs: [setup, measure]
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.setup.outputs.matrix) }}
@@ -345,16 +417,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Check cloud selection
-        run: |
-          SELECTED="${{ inputs.cloud }}"
-          THIS="${{ matrix.cloud }}"
-          if [ "${SELECTED}" != "both" ] && [ "${SELECTED}" != "${THIS}" ]; then
-            echo "Skipping ${THIS} -- selected: ${SELECTED}"
-            exit 0
-          fi
-
-      - name: Auth -- AWS
+      - name: Auth — AWS
         if: matrix.cloud == 'aws'
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -362,7 +425,7 @@ jobs:
           aws-region: ${{ secrets.AWS_REGION }}
           role-session-name: size-build-${{ github.run_id }}
 
-      - name: Auth -- Azure
+      - name: Auth — Azure
         if: matrix.cloud == 'azure'
         uses: azure/login@v2
         with:
@@ -370,12 +433,12 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Registry login -- ECR
+      - name: Registry login — ECR
         if: matrix.cloud == 'aws'
         id: ecr-login
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Registry login -- ACR
+      - name: Registry login — ACR
         if: matrix.cloud == 'azure'
         run: az acr login --name "${{ secrets.ACR_LOGIN_SERVER }}"
 
@@ -399,15 +462,28 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
+      # Provenance comes from the same generator the pipeline uses. This job used
+      # to inline a hand-written predicate, so the size images carried a
+      # different provenance shape from every other image in the project.
       - name: Build, push, sign and attest all size images
+        env:
+          GH_REPOSITORY:  ${{ github.repository }}
+          GH_REF_NAME:    ${{ github.ref_name }}
+          GH_SHA:         ${{ github.sha }}
+          GH_EVENT:       ${{ github.event_name }}
+          GH_WORKFLOW:    ${{ github.workflow }}
+          GH_RUN_ID:      ${{ github.run_id }}
+          GH_RUN_ATTEMPT: ${{ github.run_attempt }}
+          CLOUD:          ${{ matrix.cloud }}
         run: |
+          set -euo pipefail
           mkdir -p /tmp/size-refs
 
           for SIZE in small medium large xlarge; do
             TAG="size-${SIZE}-${{ github.run_id }}"
             IMAGE="${REGISTRY}/${REPO}:${TAG}"
 
-            echo "Building ${SIZE}..."
+            echo "── ${SIZE} ──"
             docker buildx build \
               --tag "${IMAGE}" \
               --push \
@@ -421,21 +497,17 @@ jobs:
             cosign sign --yes "${IMAGE_REF}"
 
             syft "${IMAGE_REF}" -o cyclonedx-json=/tmp/sbom-${SIZE}.json
-            cosign attest --yes \
-              --type cyclonedx \
-              --predicate /tmp/sbom-${SIZE}.json \
-              "${IMAGE_REF}"
+            cosign attest --yes --type cyclonedx \
+              --predicate /tmp/sbom-${SIZE}.json "${IMAGE_REF}"
 
-            REPO_URL="https://github.com/${{ github.repository }}"
-            RUN_ID="${{ github.run_id }}"
-            echo "{\"buildDefinition\":{\"buildType\":\"https://slsa.dev/container-based-build/v0.1\",\"externalParameters\":{\"size\":\"${SIZE}\"}},\"runDetails\":{\"builder\":{\"id\":\"${REPO_URL}/actions/runs/${RUN_ID}\"}}}" > /tmp/prov-${SIZE}.json
-            cosign attest --yes \
-              --type slsaprovenance1 \
-              --predicate /tmp/prov-${SIZE}.json \
-              "${IMAGE_REF}"
+            FULL_IMAGE="${IMAGE}" \
+            BUILD_TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            python3 scripts/gen_slsa_provenance.py
+            cosign attest --yes --type slsaprovenance1 \
+              --predicate provenance.json "${IMAGE_REF}"
 
             echo "${IMAGE_REF}" > /tmp/size-refs/${SIZE}.txt
-            echo "Done: ${SIZE} -> ${IMAGE_REF}"
+            echo "${SIZE} -> ${IMAGE_REF}"
           done
 
       - name: Upload size image refs
@@ -454,20 +526,16 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJson(needs.setup.outputs.matrix) }}
 
+    env:
+      CLOUD: ${{ matrix.cloud }}
+      NAMESPACE: supply-chain-demo
+      RESULTS_DIR: /tmp/size-results
+
     steps:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Check cloud selection
-        run: |
-          SELECTED="${{ inputs.cloud }}"
-          THIS="${{ matrix.cloud }}"
-          if [ "${SELECTED}" != "both" ] && [ "${SELECTED}" != "${THIS}" ]; then
-            echo "Skipping ${THIS} -- selected: ${SELECTED}"
-            exit 0
-          fi
-
-      - name: Auth -- AWS
+      - name: Auth — AWS
         if: matrix.cloud == 'aws'
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -475,7 +543,7 @@ jobs:
           aws-region: ${{ secrets.AWS_REGION }}
           role-session-name: size-measure-${{ github.run_id }}
 
-      - name: Auth -- Azure
+      - name: Auth — Azure
         if: matrix.cloud == 'azure'
         uses: azure/login@v2
         with:
@@ -483,14 +551,14 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Kubeconfig -- EKS
+      - name: Kubeconfig — EKS
         if: matrix.cloud == 'aws'
         run: |
           aws eks update-kubeconfig \
             --region "${{ secrets.AWS_REGION }}" \
             --name "${{ secrets.EKS_CLUSTER_NAME }}"
 
-      - name: Kubeconfig -- AKS
+      - name: Kubeconfig — AKS
         if: matrix.cloud == 'azure'
         run: |
           az aks get-credentials \
@@ -504,59 +572,71 @@ jobs:
           name: size-refs-${{ matrix.cloud }}
           path: /tmp/size-refs/
 
-      - name: Measure admission latency per image size
+      - name: Preflight — confirm Enforce and record the environment
         run: |
-          N=${{ github.event.inputs.size_iterations }}
-          echo "cloud,size,approx_mb,latency_ms" > /tmp/size-latency-raw.csv
+          set -euo pipefail
+          mkdir -p "${RESULTS_DIR}"
+          kubectl create namespace "${NAMESPACE}" \
+            --dry-run=client -o yaml | kubectl apply -f -
 
+          FAIL=0
+          for P in verify-image-signature verify-sbom-cyclonedx verify-slsa-provenance; do
+            ACTION=$(kubectl get clusterpolicy "$P" \
+              -o jsonpath='{.spec.validationFailureAction}' 2>/dev/null || true)
+            [ "${ACTION:-MISSING}" = "Enforce" ] || { echo "❌ $P: ${ACTION:-MISSING}"; FAIL=1; }
+          done
+          if [ "${FAIL}" = "1" ]; then
+            echo "ERROR: the size experiment requires all policies in Enforce."
+            exit 1
+          fi
+
+          jq -n \
+            --arg cloud "${CLOUD}" \
+            --arg kyverno_image "$(kubectl get deployment kyverno-admission-controller \
+              -n kyverno -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || echo unknown)" \
+            --arg replicas "$(kubectl get deployment kyverno-admission-controller \
+              -n kyverno -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo unknown)" \
+            --arg namespace "${NAMESPACE}" \
+            --arg run_url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --arg generated "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{cloud: $cloud, kyverno_image: $kyverno_image,
+              kyverno_ready_replicas: $replicas, probe_namespace: $namespace,
+              experiment: "image size vs admission cost",
+              run_url: $run_url, generated: $generated}' \
+            > "${RESULTS_DIR}/_environment.json"
+
+      - name: Measure admission cost per image size
+        run: |
+          set -euo pipefail
           for SIZE in small medium large xlarge; do
-            case ${SIZE} in
-              small)  MB=5   ;;
-              medium) MB=30  ;;
-              large)  MB=120 ;;
-              xlarge) MB=400 ;;
-            esac
-
             IMAGE_REF=$(cat /tmp/size-refs/${SIZE}.txt)
-            echo "Measuring ${SIZE} (~${MB}MB) -- ${N} iterations..."
-
-            for j in $(seq 1 ${N}); do
-              kubectl delete pod size-probe --ignore-not-found 2>/dev/null
-              kubectl wait pod/size-probe --for=delete --timeout=30s 2>/dev/null || true
-
-              START=$(date +%s%3N)
-              kubectl run size-probe \
-                --image="${IMAGE_REF}" \
-                --restart=Never \
-                --command -- sh -c 'exit 0' 2>/dev/null
-
-              for k in $(seq 1 20); do
-                PHASE=$(kubectl get pod size-probe \
-                  -o jsonpath='{.status.phase}' 2>/dev/null || echo "Pending")
-                if [ "${PHASE}" = "Succeeded" ] || [ "${PHASE}" = "Failed" ]; then break; fi
-                sleep 0.5
-              done
-              END=$(date +%s%3N)
-
-              echo "${{ matrix.cloud }},${SIZE},${MB},$((END - START))" >> /tmp/size-latency-raw.csv
-              sleep 1
-            done
+            bash scripts/measure-admission.sh "size-${SIZE}" "${IMAGE_REF}" \
+              "${{ inputs.size_iterations }}" "size"
           done
 
-      - name: Compute size statistics
-        env:
-          CLOUD: ${{ matrix.cloud }}
-          ITERATIONS: ${{ github.event.inputs.size_iterations }}
+      - name: Build the size artefact
+        if: always()
         run: |
-          python3 scripts/size_latency_stats.py
+          python3 scripts/latency_report.py \
+            --results-dir "${RESULTS_DIR}" \
+            --cloud "${CLOUD}" \
+            --out "size-latency-${CLOUD}.json" \
+            --csv "size-latency-${CLOUD}.csv"
 
-      - name: Upload size latency CSV
+      - name: Upload size latency artefact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: size-latency-${{ matrix.cloud }}
-          path: /tmp/size-latency-${{ matrix.cloud }}.csv
-          retention-days: 30
+          path: |
+            size-latency-*.json
+            size-latency-*.csv
+            /tmp/size-results/requests.csv
+          if-no-files-found: error
+          retention-days: 90
 
       - name: Cleanup
         if: always()
-        run: kubectl delete pod size-probe --ignore-not-found
+        run: |
+          kubectl delete pods -n "${NAMESPACE}" \
+            -l experiment=admission-latency --wait=false 2>/dev/null || true
