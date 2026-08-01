@@ -598,8 +598,17 @@ jobs:
         run: |
           set -euo pipefail
           SEED="${GITHUB_RUN_ID}"
-          mapfile -t ORDER < <(printf '%s\n' small medium large xlarge \
-            | shuf --random-source=<(yes "${SEED}"))
+          # Was `shuf --random-source=<(yes "${SEED}")`, which does not
+          # randomise: shuf reads only a few bytes of that repeated string, and
+          # consecutive GitHub run ids share their leading digits, so the
+          # permutation was constant. Measured: 100 consecutive run ids all give
+          # `xlarge medium large small`, which is what both runs that have
+          # executed this job recorded. Same defect and same fix as
+          # scripts/run-latency-matrix.sh — see the comment there.
+          # Kept to one line on purpose: this is a YAML block scalar, so a
+          # multi-line python -c body at column 0 would end the block.
+          ORDER_STR=$(python3 -c "import random,sys; c=list(sys.argv[2:]); random.Random(int(sys.argv[1])).shuffle(c); print(' '.join(c))" "${SEED}" small medium large xlarge)
+          read -r -a ORDER <<< "${ORDER_STR}"
 
           echo "Size order: ${ORDER[*]}   (seed ${SEED})"
           jq -n \

@@ -1,0 +1,30 @@
+[
+  {
+    "name": "small",
+    "image_ref": "812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world@sha256:4d88ed8255af9ea68b2727e08fb9b159fe43ac45084130e28f715e7b269b046a",
+    "digest": "sha256:4d88ed8255af9ea68b2727e08fb9b159fe43ac45084130e28f715e7b269b046a",
+    "compressed_bytes": 3421106,
+    "layer_count": 1
+  },
+  {
+    "name": "medium",
+    "image_ref": "812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world@sha256:cd879a4f34ad65f1901ea718d295cfd2f66df33bc672a13a66ec37f88fa4f514",
+    "digest": "sha256:cd879a4f34ad65f1901ea718d295cfd2f66df33bc672a13a66ec37f88fa4f514",
+    "compressed_bytes": 10666701,
+    "layer_count": 2
+  },
+  {
+    "name": "large",
+    "image_ref": "812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world@sha256:ac725696efbd55d718d8ed5f685293b4d9d97c13072c3a09f08b35962211c279",
+    "digest": "sha256:ac725696efbd55d718d8ed5f685293b4d9d97c13072c3a09f08b35962211c279",
+    "compressed_bytes": 72256515,
+    "layer_count": 5
+  },
+  {
+    "name": "xlarge",
+    "image_ref": "812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world@sha256:fb373ec3d74901d7575dcfe5fd75ae189e5f01888334d419cec10a47d9a24e34",
+    "digest": "sha256:fb373ec3d74901d7575dcfe5fd75ae189e5f01888334d419cec10a47d9a24e34",
+    "compressed_bytes": 115852276,
+    "layer_count": 7
+  }
+]

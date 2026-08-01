@@ -113,9 +113,43 @@ apply_condition() {  # <condition>
 }
 
 # ── Order ─────────────────────────────────────────────────────────────────────
+#
+# THE SHUFFLE USED TO BE `shuf --random-source=<(yes "${RANDOM_SEED}")`, AND IT
+# DID NOT RANDOMISE ANYTHING.
+#
+# `yes N` is a stream of one repeated string, and shuf consumes only a few bytes
+# of it to permute three items. GitHub run ids are 11 digits that share their
+# leading digits for months at a time, so the bytes shuf actually reads were
+# effectively constant and every run produced the same permutation. Measured:
+# 200 consecutive run ids all yield `baseline enforce audit`, and all three real
+# runs to date — 30692789440, 30704230504, 30706207673 — recorded exactly that.
+# The size loop had the same defect: 100 consecutive ids all yield
+# `xlarge medium large small`.
+#
+# The consequence is not cosmetic. Enforce was measured second and audit third in
+# every run ever performed, so the audit-vs-enforce difference is confounded with
+# position in all of them, and the write-up's claim that conditions ran "in a
+# randomised order" was untrue. What the old code actually delivered was a single
+# re-ordering, fixed forever.
+#
+# python3's Mersenne Twister is seeded from the whole integer and gives a
+# different permutation for adjacent run ids, which is the property that was
+# wanted. It is still fully reproducible from the recorded seed.
 CONDITIONS=(baseline audit enforce)
-mapfile -t ORDER < <(printf '%s\n' "${CONDITIONS[@]}" \
-  | shuf --random-source=<(yes "${RANDOM_SEED}"))
+
+if [ -n "${CONDITION_ORDER:-}" ]; then
+  # Escape hatch for breaking the confound above: a run can be told to measure a
+  # specific order, e.g. CONDITION_ORDER="baseline audit enforce" to put audit
+  # before enforce for once. Recorded in the artefact as such, so an artefact
+  # never claims to be randomised when it was chosen.
+  read -r -a ORDER <<< "${CONDITION_ORDER}"
+  ORDER_SOURCE="explicit"
+else
+  ORDER_STR=$(python3 -c "import random,sys; c=list(sys.argv[2:]); random.Random(int(sys.argv[1])).shuffle(c); print(' '.join(c))" \
+    "${RANDOM_SEED}" "${CONDITIONS[@]}")
+  read -r -a ORDER <<< "${ORDER_STR}"
+  ORDER_SOURCE="seeded-shuffle"
+fi
 
 echo "════════════════════════════════════════════════════════════"
 echo "  Latency matrix — ${CLOUD}"
@@ -128,10 +162,14 @@ jq -n \
   --arg seed "${RANDOM_SEED}" \
   --arg settle "${SETTLE_SECONDS}" \
   --arg warmup "${WARMUP}" \
+  --arg source "${ORDER_SOURCE}" \
   --argjson order "$(printf '%s\n' "${ORDER[@]}" | jq -R . | jq -s .)" \
-  '{condition_order: $order, random_seed: $seed,
+  '{condition_order: $order, random_seed: $seed, order_source: $source,
     settle_seconds: ($settle | tonumber), warmup_discarded: ($warmup | tonumber),
-    rationale: "conditions randomised so no single condition systematically absorbs webhook re-registration after a policy change"}' \
+    rationale: (if $source == "explicit"
+                then "order chosen explicitly via CONDITION_ORDER, not randomised — used to break the position confound recorded as D24"
+                else "conditions randomised so no single condition systematically absorbs webhook re-registration after a policy change"
+                end)}' \
   > "${RESULTS_DIR}/_order.json"
 
 for condition in "${ORDER[@]}"; do

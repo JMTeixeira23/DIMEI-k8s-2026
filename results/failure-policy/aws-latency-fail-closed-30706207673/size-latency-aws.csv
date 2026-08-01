@@ -1,0 +1,5 @@
+cloud,condition,n,min_ms,p50_ms,p95_ms,p99_ms,max_ms,mean_ms,stdev_ms,rejected,admission_reviews,in_webhook_ms_per_request
+aws,size-small,20,2529,2580,2738,2749,2749,2608.5,71.49,0,40.0,46.433
+aws,size-medium,20,2523,2559,2589,2592,2592,2557,22.3,0,40.0,47.744
+aws,size-large,20,2530,2565,2590,2687,2687,2566.05,33.89,0,40.0,48.653
+aws,size-xlarge,20,2523,2566,2642,2678,2678,2587.4,46.78,0,40.0,45.875
