@@ -1,0 +1,4 @@
+812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world@sha256:7f2cda46f3771db6732e6341e5fbb181ac4e2bb3f40f8d346ba5fa56f390bc42
+812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world@sha256:1d1909e631f909b6b7c6d4cc3f626bc406a12eec4d0f7fd6799b766b1c1fe1fe
+812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world@sha256:4d88ed8255af9ea68b2727e08fb9b159fe43ac45084130e28f715e7b269b046a
+812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world@sha256:cb02dfadcabf3d3904296807fccc4964aa1f650e4b5f7ef77ccbddb68ad1a9ce
