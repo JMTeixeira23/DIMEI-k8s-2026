@@ -25,6 +25,15 @@ on:
           - aws
           - azure
 
+# One cluster, one evidence run at a time. Two workflows that both call
+# scripts/set-failure-policy.sh will collide on the Helm release lock —
+# "another operation (install/upgrade/rollback) is in progress", which is what
+# aborted run 30703179531. Queueing rather than cancelling: an evidence run that
+# is halfway through mutating the cluster should finish, not be killed.
+concurrency:
+  group: kyverno-cluster-${{ github.repository }}
+  cancel-in-progress: false
+
 permissions:
   id-token: write   # needed for OIDC auth to AWS/Azure and for Cosign keyless signing
   contents: read

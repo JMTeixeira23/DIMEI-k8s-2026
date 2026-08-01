@@ -22,6 +22,7 @@ override.tf.json
 revision.md
 memory.md
 changes.md
+HANDOFF.md
 
 # Test binary, built with `go test -c`
 *.test
@@ -49,3 +50,6 @@ env.azure
 .vscode/
 .DS_Store
 Thumbs.db
+
+# Working documents for the revision — local only
+HANDOFF.md
