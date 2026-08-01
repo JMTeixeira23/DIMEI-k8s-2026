@@ -67,18 +67,26 @@ def summarise(samples):
 
 
 def read_requests(path):
-    """condition -> [client_ms], preserving only accepted requests."""
-    by_condition, rejected = {}, {}
+    """condition -> accepted [client_ms], plus rejected counts and totals.
+
+    A condition where every request was rejected is still a condition: it means
+    the probe image was not admissible, which is a result and not an absence of
+    data. Conditions are keyed off every row seen, not only accepted ones.
+    """
+    accepted, rejected, seen = {}, {}, {}
     if not os.path.exists(path):
-        return by_condition, rejected
+        return accepted, rejected, seen
     with open(path) as fh:
         for row in csv.DictReader(fh):
             cond = row["condition"]
+            seen[cond] = seen.get(cond, 0) + 1
+            accepted.setdefault(cond, [])
+            rejected.setdefault(cond, 0)
             if row.get("accepted") == "true":
-                by_condition.setdefault(cond, []).append(int(row["client_ms"]))
+                accepted[cond].append(int(row["client_ms"]))
             else:
-                rejected[cond] = rejected.get(cond, 0) + 1
-    return by_condition, rejected
+                rejected[cond] += 1
+    return accepted, rejected, seen
 
 
 def read_delta(results_dir, condition):
@@ -89,15 +97,28 @@ def read_delta(results_dir, condition):
         return json.load(fh)
 
 
-def webhook_cost(delta):
+def webhook_cost(delta, requests_sent):
+    """In-webhook cost for one condition.
+
+    Kyverno counts one admission review per webhook invocation, and a single pod
+    creation passes through both the mutating and the validating webhook. The
+    review count is therefore a multiple of the number of requests, and the mean
+    below is per *review*, not per pod. `per_request_ms` is the figure to compare
+    against client-side request cost, and the one Chapter 6 should quote as the
+    admission cost of creating a pod.
+    """
     if not delta:
         return None
     agg = delta["histograms"].get(KYVERNO_FAMILY, {}).get("aggregate", {})
     if not agg.get("delta_count"):
         return None
+    reviews = agg["delta_count"]
+    total_ms = agg["delta_sum_seconds"] * 1000.0
     return {
-        "admissions_observed": agg["delta_count"],
-        "mean_ms": round(agg["mean_ms"], 3),
+        "admission_reviews": reviews,
+        "reviews_per_request": round(reviews / requests_sent, 2) if requests_sent else None,
+        "mean_per_review_ms": round(agg["mean_ms"], 3),
+        "per_request_ms": round(total_ms / requests_sent, 3) if requests_sent else None,
         "total_seconds": round(agg["delta_sum_seconds"], 4),
     }
 
@@ -114,12 +135,17 @@ def policy_breakdown(results_dir, condition):
     with open(path) as fh:
         data = json.load(fh)
     rows = data["histograms"].get(POLICY_FAMILY, {}).get("series", [])
+    # The full label set is kept: the same policy and rule appear as several
+    # series distinguished by labels other than the name, and dropping those
+    # labels makes the breakdown look like duplicated rows.
     return [
         {
             "policy": r["labels"].get("policy_name", "?"),
             "rule": r["labels"].get("rule_name", "?"),
             "executions": r["delta_count"],
             "mean_ms": round(r["mean_ms"], 3),
+            "total_ms": round(r["delta_sum_seconds"] * 1000.0, 3),
+            "labels": r["labels"],
         }
         for r in rows
     ]
@@ -139,14 +165,15 @@ def main():
         with open(env_path) as fh:
             environment = json.load(fh)
 
-    requests, rejected = read_requests(os.path.join(args.results_dir, "requests.csv"))
+    requests, rejected, sent = read_requests(
+        os.path.join(args.results_dir, "requests.csv"))
 
     # Conditions in the order they were measured, discovered from what exists
     # rather than assumed, so a condition that was skipped is absent instead of
     # being reported as zero.
     known_order = ["baseline", "audit", "enforce", "enforce-nocache"]
-    measured = [c for c in known_order if c in requests]
-    for extra in sorted(set(requests) - set(known_order)):
+    measured = [c for c in known_order if c in sent]
+    for extra in sorted(set(sent) - set(known_order)):
         measured.append(extra)
 
     conditions = []
@@ -154,9 +181,10 @@ def main():
         delta = read_delta(args.results_dir, cond)
         conditions.append({
             "condition": cond,
+            "requests_sent": sent.get(cond, 0),
             "request_cost": summarise(requests.get(cond, [])),
             "rejected_requests": rejected.get(cond, 0),
-            "in_webhook_cost": webhook_cost(delta),
+            "in_webhook_cost": webhook_cost(delta, sent.get(cond, 0)),
             "policy_breakdown": policy_breakdown(args.results_dir, cond),
         })
 
@@ -202,18 +230,20 @@ def main():
         writer.writerow([
             "cloud", "condition", "n", "min_ms", "p50_ms", "p95_ms", "p99_ms",
             "max_ms", "mean_ms", "stdev_ms", "rejected",
-            "webhook_admissions", "webhook_mean_ms",
+            "admission_reviews", "in_webhook_ms_per_request",
         ])
         for c in conditions:
             r, w = c["request_cost"], c["in_webhook_cost"]
             if not r:
+                writer.writerow([args.cloud, c["condition"], 0, "", "", "", "",
+                                 "", "", "", c["rejected_requests"], "", ""])
                 continue
             writer.writerow([
                 args.cloud, c["condition"], r["n"], r["min_ms"], r["p50_ms"],
                 r["p95_ms"], r["p99_ms"], r["max_ms"], r["mean_ms"], r["stdev_ms"],
                 c["rejected_requests"],
-                w["admissions_observed"] if w else "",
-                w["mean_ms"] if w else "",
+                w["admission_reviews"] if w else "",
+                w["per_request_ms"] if w else "",
             ])
 
     # ── Console ──────────────────────────────────────────────────────────────
@@ -224,15 +254,20 @@ def main():
     print(f"  Probes in namespace: {environment.get('probe_namespace', '?')}")
     print("=" * 78)
     print(f"{'condition':<18}{'n':>4}{'p50':>8}{'p95':>8}{'p99':>8}{'mean':>9}"
-          f"{'in-webhook':>13}")
+          f"{'in-webhook/req':>16}")
     print("-" * 78)
     for c in conditions:
         r, w = c["request_cost"], c["in_webhook_cost"]
         if not r:
+            print(f"{c['condition']:<18}{0:>4}   all {c['rejected_requests']} "
+                  f"request(s) rejected — the probe image was not admissible")
             continue
-        webhook = f"{w['mean_ms']:.1f} ms" if w else "n/a"
+        webhook = f"{w['per_request_ms']:.1f} ms" if w else "n/a"
         print(f"{c['condition']:<18}{r['n']:>4}{r['p50_ms']:>7}ms{r['p95_ms']:>7}ms"
-              f"{r['p99_ms']:>7}ms{r['mean_ms']:>8.1f}ms{webhook:>13}")
+              f"{r['p99_ms']:>7}ms{r['mean_ms']:>8.1f}ms{webhook:>16}")
+        if w and w["reviews_per_request"] and w["reviews_per_request"] != 1:
+            print(f"{'':<18}      ({w['reviews_per_request']:g} admission reviews per "
+                  f"request at {w['mean_per_review_ms']:.1f} ms each)")
 
     print("-" * 78)
     for label, key in [("enforce vs baseline", "enforce_vs_baseline_request_cost"),
@@ -251,8 +286,11 @@ def main():
     print("=" * 78)
     print(f"  {args.out}\n  {args.csv}")
 
+    # Exit non-zero only when nothing was attempted. A condition whose requests
+    # were all rejected has been reported above and is a result in itself.
     if not conditions:
-        sys.exit("no conditions were measured — nothing to report")
+        sys.exit("no requests were recorded — measure-admission.sh did not run, "
+                 f"or wrote nothing to {args.results_dir}/requests.csv")
 
 
 if __name__ == "__main__":

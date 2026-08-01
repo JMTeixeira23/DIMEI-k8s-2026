@@ -409,6 +409,10 @@ jobs:
     runs-on: ubuntu-latest
     environment: ${{ matrix.cloud }}
     needs: [setup, measure]
+    # Skipped entirely when no size iterations are requested, rather than
+    # building, signing and attesting four images for a measurement that will
+    # not happen.
+    if: ${{ inputs.size_iterations != '0' }}
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.setup.outputs.matrix) }}
@@ -522,6 +526,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: ${{ matrix.cloud }}
     needs: [setup, build-size-images]
+    if: ${{ inputs.size_iterations != '0' }}
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.setup.outputs.matrix) }}

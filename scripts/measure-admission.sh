@@ -37,6 +37,11 @@ RESULTS_DIR="${RESULTS_DIR:-/tmp/latency-results}"
 WARMUP="${WARMUP:-3}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+if [ "${ITERATIONS}" -lt 1 ] 2>/dev/null; then
+  echo "Skipping ${CONDITION}: ${ITERATIONS} iterations requested."
+  exit 0
+fi
+
 mkdir -p "${RESULTS_DIR}"
 REQUESTS_CSV="${RESULTS_DIR}/requests.csv"
 if [ ! -f "${REQUESTS_CSV}" ]; then
