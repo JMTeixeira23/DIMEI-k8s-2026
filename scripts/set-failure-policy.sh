@@ -51,10 +51,17 @@ set -euo pipefail
 MODE="${1:-}"
 KYVERNO_NS="${KYVERNO_NS:-kyverno}"
 KYVERNO_RELEASE="${KYVERNO_RELEASE:-kyverno}"
-KYVERNO_VERSION="${KYVERNO_VERSION:-3.1.4}"
 RESULTS_DIR="${RESULTS_DIR:-/tmp/failure-policy}"
 SETTLE_SECONDS="${SETTLE_SECONDS:-20}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# The chart version this script upgrades with must be the one the cluster was
+# built on. It used to be a third hardcoded copy of the number; a `helm upgrade`
+# with a different --version silently moves the cluster to another Kyverno mid
+# experiment, which is the most expensive way this repository could lie.
+# shellcheck source=../versions.env
+source "$(cd "${HERE}/.." && pwd)/versions.env"
+KYVERNO_VERSION="${KYVERNO_VERSION:-${KYVERNO_CHART_VERSION}}"
 
 case "${MODE}" in
   ignore) FORCE_IGNORE=true  ; WANT=Ignore ;;

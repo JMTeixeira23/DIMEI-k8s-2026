@@ -14,8 +14,37 @@ set -euo pipefail
 
 RESOURCE_GROUP="supply-chain-rg"
 CLUSTER_NAME="supply-chain-aks"
-KYVERNO_VERSION="3.1.4"
 KYVERNO_NS="kyverno"
+
+# ── Versions ─────────────────────────────────────────────────────────────────
+# Shared with bootstrap-aws.sh so the two clouds cannot end up on different
+# Kyverno versions. That is not a tidiness point: the whole two-cloud comparison
+# rests on the clusters being the same in every respect but the provider.
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=versions.env
+source "${HERE}/versions.env"
+KYVERNO_VERSION="${KYVERNO_VERSION:-${KYVERNO_CHART_VERSION}}"
+
+if [ "${KYVERNO_VERSION}" != "${EVALUATED_KYVERNO_CHART}" ] && [ "${ALLOW_VERSION_DRIFT:-0}" != "1" ]; then
+  cat >&2 <<DRIFT
+ERROR: Kyverno version drift.
+
+  requested : ${KYVERNO_VERSION}
+  evaluated : ${EVALUATED_KYVERNO_CHART}   (what results/ was collected on, on AWS)
+
+Installing a different version here would make the Azure cluster incomparable
+with the AWS one, and the two-cloud result in Chapter 6 would be invalid — a
+comparison across two different Kyverno versions measures the versions, not the
+clouds.
+
+If that is what you intend, re-run with:
+
+  ALLOW_VERSION_DRIFT=1 bash $(basename "$0")
+
+and re-run the AWS experiments on the same version before comparing them.
+DRIFT
+  exit 3
+fi
 
 echo "════════════════════════════════════════════════════"
 echo "  Supply Chain Security — Azure Bootstrap"

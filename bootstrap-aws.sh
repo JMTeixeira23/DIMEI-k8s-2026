@@ -14,8 +14,44 @@ set -euo pipefail
 
 CLUSTER_NAME="supply-chain-eks"
 REGION="eu-west-1"
-KYVERNO_VERSION="3.1.4"
 KYVERNO_NS="kyverno"
+
+# ── Versions ─────────────────────────────────────────────────────────────────
+# Single source of truth, shared with bootstrap-azure.sh and
+# scripts/set-failure-policy.sh. The guard below is the point: rebuilding a
+# cluster onto a Kyverno version other than the one the committed results were
+# collected on has to be a deliberate act, not a side effect of editing a file.
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=versions.env
+source "${HERE}/versions.env"
+KYVERNO_VERSION="${KYVERNO_VERSION:-${KYVERNO_CHART_VERSION}}"
+
+if [ "${KYVERNO_VERSION}" != "${EVALUATED_KYVERNO_CHART}" ] && [ "${ALLOW_VERSION_DRIFT:-0}" != "1" ]; then
+  cat >&2 <<DRIFT
+ERROR: Kyverno version drift.
+
+  requested : ${KYVERNO_VERSION}
+  evaluated : ${EVALUATED_KYVERNO_CHART}   (what results/ was collected on)
+
+Every performance number, every attack outcome and every evasion result in
+results/ is a measurement of chart ${EVALUATED_KYVERNO_CHART}. Installing a
+different version means:
+
+  - the results in results/ no longer describe this cluster;
+  - if the other cloud runs ${EVALUATED_KYVERNO_CHART}, the two are not
+    comparable and the two-cloud comparison is invalid;
+  - findings that are version-specific (the image verification cache, absent in
+    v1.11.4 and present from v1.12) may change.
+
+If that is what you intend, re-run with:
+
+  ALLOW_VERSION_DRIFT=1 bash $(basename "$0")
+
+and update EVALUATED_KYVERNO_CHART in versions.env once the affected
+experiments have been re-run on the new version.
+DRIFT
+  exit 3
+fi
 AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com"
 
