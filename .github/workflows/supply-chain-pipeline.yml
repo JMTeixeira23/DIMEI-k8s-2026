@@ -35,13 +35,27 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  id-token: write   # needed for OIDC auth to AWS/Azure and for Cosign keyless signing
+  id-token: write      # OIDC auth to AWS/Azure, and Cosign keyless signing
   contents: read
   actions: read
+  attestations: write  # actions/attest-build-provenance (SLSA L2, revision 3.1)
 
 env:
   IMAGE_TAG: ${{ github.sha }}-${{ github.run_id }}
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+  # ── The SLSA Build L2 switch (revision item 3.1) ────────────────────────────
+  # "true"  → additionally emit platform-generated, platform-signed provenance
+  #           via actions/attest-build-provenance. Purely additive.
+  # "false" → the pipeline is exactly what it was: Cosign-attested provenance
+  #           generated in-build, which is SLSA Build L1.
+  #
+  # This one value is the entire revert path. The admission policy verifies the
+  # Cosign attestation either way and never reads the L2 one, so flipping this
+  # cannot change what the cluster accepts.
+  #
+  # Set the repository variable SLSA_L2 to override without editing this file.
+  SLSA_L2: ${{ vars.SLSA_L2 || 'true' }}
 
 jobs:
   setup:
@@ -215,9 +229,70 @@ jobs:
             "${IMAGE_REF}"
           echo "Provenance attested"
 
+      # --- SLSA Build Level 2 (additive, revertible) ------------------------
+      # Revision item 3.1. Everything above produces provenance from *inside the
+      # build job*, which means the build can forge its own provenance — that is
+      # the L1/L2 line. actions/attest-build-provenance has the hosted platform
+      # generate and sign the statement instead.
+      #
+      # ── HOW TO REVERT TO L1, COMPLETELY ──────────────────────────────────
+      #   Set the repository variable SLSA_L2 to "false", or change the default
+      #   in the `env:` block at the top of this file. Nothing else. The two
+      #   steps below are the entire L2 surface.
+      #
+      # ── WHY IT CANNOT BREAK L1 ───────────────────────────────────────────
+      #   1. Purely additive. gen_slsa_provenance.py, the three cosign steps and
+      #      the verification step above are untouched.
+      #   2. Different storage. This publishes an OCI *referrer*; Kyverno reads
+      #      the Cosign attestation tag (sha256-<digest>.att). They do not
+      #      collide, and the admission policy never looks at this one.
+      #   3. continue-on-error. If the attest step fails, the pipeline carries
+      #      on with its L1 guarantees intact, and the failure is *recorded* in
+      #      the evidence artefact rather than swallowed.
+      #
+      # The evidence artefact separates what was observed from what it is taken
+      # to mean; the level is an interpretation and is labelled as one.
+
+      - name: SLSA Build L2 — platform-generated provenance
+        id: slsa-l2
+        if: ${{ env.SLSA_L2 == 'true' }}
+        continue-on-error: true
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.REPO }}
+          subject-digest: ${{ env.DIGEST }}
+          push-to-registry: true
+
+      - name: Record the SLSA L2 evidence
+        if: always()
+        env:
+          CLOUD: ${{ matrix.cloud }}
+          L2_ENABLED: ${{ env.SLSA_L2 == 'true' }}
+          L2_OUTCOME: ${{ env.SLSA_L2 == 'true' && steps.slsa-l2.outcome || 'skipped' }}
+          BUNDLE_PATH: ${{ steps.slsa-l2.outputs.bundle-path }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          OUT="slsa-l2-${CLOUD}.json" \
+          IMAGE_REF="${IMAGE_REF}" \
+          SUBJECT_DIGEST="${DIGEST}" \
+            bash scripts/slsa-l2-evidence.sh
+
+      - name: Upload the SLSA L2 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: slsa-l2-${{ matrix.cloud }}
+          path: slsa-l2-*.json
+          if-no-files-found: warn
+          retention-days: 90
+
       # --- Verify attestations ---------------------------------------------
       # Re-verify everything from scratch to confirm the full attestation chain
       # is intact before we proceed to cluster deployment.
+      #
+      # This is the L1 path and the one the admission policy depends on. It is
+      # deliberately placed *after* the L2 steps so that if L2 ever did disturb
+      # the registry state, this would fail here rather than silently at TC-01.
 
       - name: Verify signature and attestations
         run: |
