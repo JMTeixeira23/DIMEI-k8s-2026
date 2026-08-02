@@ -164,11 +164,16 @@ jobs:
       - name: Install Cosign + Syft + crane
         run: |
           set -euo pipefail
-          curl -sSfL https://github.com/sigstore/cosign/releases/download/v2.2.3/cosign-linux-amd64 \
+          curl -sSfL https://github.com/sigstore/cosign/releases/download/v3.1.2/cosign-linux-amd64 \
             -o /usr/local/bin/cosign && chmod +x /usr/local/bin/cosign
-          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh \
-            | sh -s -- -b /usr/local/bin v0.105.1
-          curl -sSfL https://github.com/google/go-containerregistry/releases/download/v0.19.1/go-containerregistry_Linux_x86_64.tar.gz \
+          # Syft, pinned by release archive rather than by piping an
+          # installer from a mutable branch into a shell -- the pattern
+          # this project exists to argue against.
+          curl -sSfL -o /tmp/syft.tar.gz \
+            "https://github.com/anchore/syft/releases/download/v1.50.0/syft_1.50.0_linux_amd64.tar.gz"
+          tar -xzf /tmp/syft.tar.gz -C /usr/local/bin syft
+          chmod +x /usr/local/bin/syft
+          curl -sSfL https://github.com/google/go-containerregistry/releases/download/v0.21.8/go-containerregistry_Linux_x86_64.tar.gz \
             | tar -xz -C /usr/local/bin crane
           chmod +x /usr/local/bin/crane
           cosign version

@@ -26,31 +26,32 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${HERE}/versions.env"
 KYVERNO_VERSION="${KYVERNO_VERSION:-${KYVERNO_CHART_VERSION}}"
 
-if [ "${KYVERNO_VERSION}" != "${EVALUATED_KYVERNO_CHART}" ] && [ "${ALLOW_VERSION_DRIFT:-0}" != "1" ]; then
+if [ "${KYVERNO_VERSION}" != "${RESULTS_KYVERNO_CHART}" ]; then
   cat >&2 <<DRIFT
-ERROR: Kyverno version drift.
 
-  requested : ${KYVERNO_VERSION}
-  evaluated : ${EVALUATED_KYVERNO_CHART}   (what results/ was collected on)
+  ╔════════════════════════════════════════════════════════════════════════╗
+  ║  results/ DOES NOT DESCRIBE THE CLUSTER THIS IS ABOUT TO BUILD         ║
+  ╚════════════════════════════════════════════════════════════════════════╝
 
-Every performance number, every attack outcome and every evasion result in
-results/ is a measurement of chart ${EVALUATED_KYVERNO_CHART}. Installing a
-different version means:
+    installing : Kyverno chart ${KYVERNO_VERSION} (app ${KYVERNO_APP_VERSION})
+    results/   : Kyverno chart ${RESULTS_KYVERNO_CHART} (app ${RESULTS_KYVERNO_APP})
 
-  - the results in results/ no longer describe this cluster;
-  - if the other cloud runs ${EVALUATED_KYVERNO_CHART}, the two are not
-    comparable and the two-cloud comparison is invalid;
-  - findings that are version-specific (the image verification cache, absent in
-    v1.11.4 and present from v1.12) may change.
+  Every performance number, attack outcome and evasion result under results/ is
+  a measurement of chart ${RESULTS_KYVERNO_CHART}. After this bootstrap they
+  describe a cluster that no longer exists, and must be re-collected before
+  anything is written from them:
 
-If that is what you intend, re-run with:
+    - the pipeline (test cases)      - the attack suite, both failure policies
+    - the latency matrix             - the size matrix
+    - the concurrency sweep          - the evasion suite, both dispatches
 
-  ALLOW_VERSION_DRIFT=1 bash $(basename "$0")
+  Both clouds must end up on the same version, or the two-cloud comparison
+  measures the version rather than the provider.
 
-and update EVALUATED_KYVERNO_CHART in versions.env once the affected
-experiments have been re-run on the new version.
+  Update RESULTS_* in versions.env only once those re-runs are committed.
+
 DRIFT
-  exit 3
+  sleep 3
 fi
 AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com"

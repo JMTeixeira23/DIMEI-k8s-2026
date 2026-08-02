@@ -33,12 +33,13 @@ JSON=0
 # Never hardcoded here: if a pin moves and this script is not updated, it must
 # report the new value, not the value someone typed into this script.
 
-pin_kyverno_aws=$(grep -oP 'KYVERNO_VERSION="\K[^"]+' bootstrap-aws.sh 2>/dev/null | head -1)
-pin_kyverno_azure=$(grep -oP 'KYVERNO_VERSION="\K[^"]+' bootstrap-azure.sh 2>/dev/null | head -1)
-pin_kyverno_failpol=$(grep -oP 'KYVERNO_VERSION="\$\{KYVERNO_VERSION:-\K[^}]+' scripts/set-failure-policy.sh 2>/dev/null | head -1)
+# shellcheck source=../versions.env
+source ./versions.env
+
+pin_kyverno="${KYVERNO_CHART_VERSION} (app ${KYVERNO_APP_VERSION})"
 pin_cosign=$(grep -ohP 'cosign/releases/download/\Kv[0-9.]+' .github/workflows/*.yml 2>/dev/null | sort -u | paste -sd, -)
 pin_cosign_action=$(grep -ohP 'cosign-release: \K\S+' .github/workflows/*.yml 2>/dev/null | sort -u | paste -sd, -)
-pin_syft=$(grep -ohP "sh -s -- -b \S+ \Kv[0-9.]+" .github/workflows/*.yml 2>/dev/null | sort -u | paste -sd, -)
+pin_syft=$(grep -ohP 'syft/releases/download/\Kv[0-9.]+' .github/workflows/*.yml 2>/dev/null | sort -u | paste -sd, -)
 pin_crane=$(grep -ohP 'go-containerregistry/releases/download/\Kv[0-9.]+' .github/workflows/*.yml 2>/dev/null | sort -u | paste -sd, -)
 
 # ── Ask the upstreams ────────────────────────────────────────────────────────
@@ -84,12 +85,8 @@ if [ "${JSON}" = "0" ]; then
   printf '  %-22s %-18s %-24s %-14s %s\n' ---- ------ ------ ----- -----------
 fi
 
-row "Kyverno chart (AWS)"   "${pin_kyverno_aws}"     "${lat_kyverno}"  "UNDER TEST" \
-    "invalidates every result in Ch. 6"
-row "Kyverno chart (Azure)" "${pin_kyverno_azure}"   "${lat_kyverno}"  "UNDER TEST" \
-    "must equal AWS or the clouds are incomparable"
-row "Kyverno (failure-pol)" "${pin_kyverno_failpol}" "${lat_kyverno}"  "UNDER TEST" \
-    "must equal the bootstrap pin"
+row "Kyverno (versions.env)" "${pin_kyverno}"       "${lat_kyverno}"  "UNDER TEST" \
+    "one pin, read by both bootstraps and set-failure-policy.sh"
 row "Cosign (workflows)"    "${pin_cosign}"          "${lat_cosign}"   "UNDER TEST" \
     "produces the signatures Kyverno verifies"
 row "Cosign (installer)"    "${pin_cosign_action}"   "${lat_cosign}"   "UNDER TEST" \
@@ -100,20 +97,42 @@ row "crane"                 "${pin_crane}"           "${lat_crane}"    "scaffold
     "stages E3 only; nothing verifies it"
 
 if [ "${JSON}" = "0" ]; then
+  echo ""
+  if [ "${KYVERNO_CHART_VERSION}" != "${RESULTS_KYVERNO_CHART}" ]; then
+    cat <<STALE
+  ╔══════════════════════════════════════════════════════════════════════════╗
+  ║  results/ IS STALE                                                       ║
+  ╚══════════════════════════════════════════════════════════════════════════╝
+    next bootstrap installs : Kyverno ${KYVERNO_CHART_VERSION} (app ${KYVERNO_APP_VERSION}), Cosign ${COSIGN_VERSION}, Syft ${SYFT_VERSION}
+    results/ was collected on: Kyverno ${RESULTS_KYVERNO_CHART} (app ${RESULTS_KYVERNO_APP}), Cosign ${RESULTS_COSIGN}, Syft ${RESULTS_SYFT}
+
+    Nothing under results/ describes the stack the next bootstrap builds.
+    Re-run and re-commit before writing anything from them:
+      pipeline test cases · attack suite (both failure policies) · latency
+      matrix · size matrix · concurrency sweep · evasion suite (both dispatches)
+
+    Then move the RESULTS_* lines in versions.env forward — and only then.
+STALE
+  else
+    echo "  results/ describes the stack the next bootstrap builds."
+  fi
+
   cat <<'NOTE'
 
   ── How to read this ──────────────────────────────────────────────────────
   UNDER TEST  the tool is part of the system being evaluated. Its version is a
               property of the result, not an implementation detail. Changing it
-              before the experiment freeze means re-running everything that
-              depends on it — on both clouds.
+              means re-running everything that depends on it, on both clouds.
   scaffolding harness only. Bump freely.
 
-  The Kyverno pin is the one that matters. Both bootstraps and
-  scripts/set-failure-policy.sh must agree, or a cluster can be rebuilt onto a
-  different version than the one it was measured on, silently.
-
   Every evidence artefact records the Kyverno image it ran against
-  (run.kyverno_image), so any artefact can be checked against this table.
+  (run.kyverno_image), so any single artefact can be checked against this table.
+
+  ⚠️ Cosign 3.x is a MAJOR change from the 2.2.3 the committed results used.
+     The first pipeline run after the upgrade must confirm that Kyverno still
+     verifies what Cosign produces — signature and attestation storage formats
+     are exactly what changed between those majors. TC-01 is the canary: if it
+     is denied, the two tools no longer agree and that is the finding, not a
+     bug to work around silently.
 NOTE
 fi

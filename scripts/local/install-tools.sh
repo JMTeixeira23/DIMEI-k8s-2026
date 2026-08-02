@@ -4,9 +4,13 @@
 # Run once after cloning the repository.
 set -euo pipefail
 
-COSIGN_VERSION="v2.2.3"
-SYFT_VERSION="v0.105.1"
-CRANE_VERSION="v0.19.1"
+# Versions come from versions.env so a developer's local tools match what the
+# workflows install. Three separate copies of these numbers is how the repo
+# ended up reproducing a build with tools a version behind the pipeline's.
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# shellcheck source=../../versions.env
+source "${HERE}/versions.env"
+
 BIN="${HOME}/.local/bin"
 mkdir -p "${BIN}"
 
@@ -23,10 +27,15 @@ curl -sSLo "${BIN}/cosign" \
   "https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign-${OS}-${ARCH}"
 chmod +x "${BIN}/cosign"
 
-# syft
+# syft — from the pinned release archive, not by piping an installer script
+# fetched from a mutable branch into a shell. That pattern is what this project
+# exists to argue against, and it was in here.
 echo "  → syft ${SYFT_VERSION}"
-curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh \
-  | sh -s -- -b "${BIN}" "${SYFT_VERSION}"
+curl -sSfLo /tmp/syft.tar.gz \
+  "https://github.com/anchore/syft/releases/download/${SYFT_VERSION}/syft_${SYFT_VERSION#v}_${OS}_${ARCH}.tar.gz"
+tar -xzf /tmp/syft.tar.gz -C "${BIN}" syft
+chmod +x "${BIN}/syft"
+rm /tmp/syft.tar.gz
 
 # crane (OCI registry inspection — useful for Phase 4 debugging)
 echo "  → crane ${CRANE_VERSION}"

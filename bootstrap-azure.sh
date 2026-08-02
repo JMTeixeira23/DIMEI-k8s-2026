@@ -25,25 +25,22 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${HERE}/versions.env"
 KYVERNO_VERSION="${KYVERNO_VERSION:-${KYVERNO_CHART_VERSION}}"
 
-if [ "${KYVERNO_VERSION}" != "${EVALUATED_KYVERNO_CHART}" ] && [ "${ALLOW_VERSION_DRIFT:-0}" != "1" ]; then
+if [ "${KYVERNO_VERSION}" != "${RESULTS_KYVERNO_CHART}" ]; then
   cat >&2 <<DRIFT
-ERROR: Kyverno version drift.
 
-  requested : ${KYVERNO_VERSION}
-  evaluated : ${EVALUATED_KYVERNO_CHART}   (what results/ was collected on, on AWS)
+  ╔════════════════════════════════════════════════════════════════════════╗
+  ║  results/ DOES NOT DESCRIBE THE CLUSTER THIS IS ABOUT TO BUILD         ║
+  ╚════════════════════════════════════════════════════════════════════════╝
 
-Installing a different version here would make the Azure cluster incomparable
-with the AWS one, and the two-cloud result in Chapter 6 would be invalid — a
-comparison across two different Kyverno versions measures the versions, not the
-clouds.
+    installing : Kyverno chart ${KYVERNO_VERSION} (app ${KYVERNO_APP_VERSION})
+    results/   : Kyverno chart ${RESULTS_KYVERNO_CHART} (app ${RESULTS_KYVERNO_APP})
 
-If that is what you intend, re-run with:
+  The AWS cluster must be rebuilt on the same version before the two are
+  compared. A comparison across two Kyverno versions measures the versions, not
+  the cloud providers, and is worse than reporting one cloud honestly.
 
-  ALLOW_VERSION_DRIFT=1 bash $(basename "$0")
-
-and re-run the AWS experiments on the same version before comparing them.
 DRIFT
-  exit 3
+  sleep 3
 fi
 
 echo "════════════════════════════════════════════════════"

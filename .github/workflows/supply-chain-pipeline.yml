@@ -156,7 +156,7 @@ jobs:
       - name: Install Cosign
         uses: sigstore/cosign-installer@v3
         with:
-          cosign-release: v2.2.3
+          cosign-release: v3.1.2
 
       - name: Sign image
         run: |
@@ -169,8 +169,13 @@ jobs:
 
       - name: Install Syft
         run: |
-          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh \
-            | sh -s -- -b /usr/local/bin v0.105.1
+          # Syft, pinned by release archive rather than by piping an
+          # installer from a mutable branch into a shell -- the pattern
+          # this project exists to argue against.
+          curl -sSfL -o /tmp/syft.tar.gz \
+            "https://github.com/anchore/syft/releases/download/v1.50.0/syft_1.50.0_linux_amd64.tar.gz"
+          tar -xzf /tmp/syft.tar.gz -C /usr/local/bin syft
+          chmod +x /usr/local/bin/syft
 
       - name: Generate and attest SBOM
         run: |

@@ -25,6 +25,20 @@ admissionController:
   podDisruptionBudget:
     minAvailable: 2
 
+  # Prometheus metrics on :8000/metrics — the source for the in-webhook cost
+  # measurement, which reads kyverno_admission_review_duration_seconds as
+  # Δsum/Δcount by port-forwarding svc/kyverno-svc-metrics.
+  #
+  # This block used to sit at the top level of this file, where the chart has
+  # never defined it — in 3.1.4 or 3.8.2 — so Helm ignored it silently and the
+  # metrics service existed only because create/port default to true/8000
+  # anyway. Same disease as the dead webhook-timeout block removed earlier
+  # (defect D6). It is nested under the controller it belongs to now, and
+  # verified to render `kyverno-svc-metrics` on both chart versions.
+  metricsService:
+    create: true
+    port: 8000
+
 backgroundController:
   replicas: 1
 
@@ -34,22 +48,23 @@ reportsController:
 cleanupController:
   replicas: 1
 
-# The two admission-report cleanup CronJobs are not installed at all.
+# The admission-report cleanup CronJobs no longer exist in this chart.
 #
-# They run `bitnami/kubectl:1.28.5` from Docker Hub every 10 minutes, which does
-# not pull on these clusters — the jobs sit in ImagePullBackOff. The bootstrap
-# scripts used to create them and suspend them afterwards, but the schedule can
-# fire inside that window, which is how stuck pods appeared on a fresh cluster.
-# Disabling them here renders no CronJobs at all, so there is nothing to race.
+# History, because it explains why this block is absent rather than disabled:
+# chart 3.1.4 shipped two CronJobs running `bitnami/kubectl:1.28.5` from Docker
+# Hub every 10 minutes. They do not pull on these clusters and sat in
+# ImagePullBackOff; the bootstraps used to create and then suspend them, but the
+# schedule can fire inside that window, which is how stuck pods appeared on a
+# fresh cluster. A `cleanupJobs.*.enabled: false` block here suppressed them.
 #
-# Nothing in the evaluation depends on them: they delete stale admission reports,
-# and the reports controller is scaled to zero by the bootstrap anyway. Admission
-# enforcement is entirely unaffected.
-cleanupJobs:
-  admissionReports:
-    enabled: false
-  clusterAdmissionReports:
-    enabled: false
+# Chart 3.8.2 removes the `cleanupJobs` key entirely — the work moved into the
+# cleanup controller. Keeping the old block would be dead configuration that
+# Helm ignores in silence, which is the defect this file has already been
+# cleaned of twice (D6, and the metricsService block above). Verified by
+# rendering both charts with this file: **zero CronJobs on 3.1.4 and on 3.8.2**.
+#
+# If this project ever pins back to a chart older than 3.8, the block must come
+# back or the CronJobs return.
 
 # ── The admission failure policy: the single control point ───────────────────
 #
@@ -86,11 +101,6 @@ features:
 
 webhooksCleanup:
   enabled: false
-
-# Prometheus metrics on :8000/metrics — useful during latency measurements.
-metricsService:
-  create: true
-  port: 8000
 
 # Webhook timeout: 10 seconds, Kyverno's default. NOT configured here.
 #
