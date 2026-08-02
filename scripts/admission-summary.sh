@@ -14,6 +14,9 @@
 #   SUITE_SLUG   artefact basename, e.g. attack-results  ->  attack-results-aws.json
 #   SUITE_TITLE  human name for the console and job summary
 #   SUITE_NOUN   what one row is called, e.g. "scenarios" or "test cases"
+#   SUITE_MATCH_PHRASE  what a PASS means, for suites where it is not an
+#                       admission outcome (the evasion suite's E2 is decided by
+#                       what the kubelet pulled, not by what was admitted)
 #
 # Outputs (in ${OUT_DIR}, default the current directory):
 #   <slug>-<cloud>.json   full evidence artefact, source for the results table
@@ -29,6 +32,7 @@ SUITE_LIB="${SUITE_LIB:?SUITE_LIB is required}"
 SUITE_SLUG="${SUITE_SLUG:?SUITE_SLUG is required}"
 SUITE_TITLE="${SUITE_TITLE:-Admission results}"
 SUITE_NOUN="${SUITE_NOUN:-cases}"
+SUITE_MATCH_PHRASE="${SUITE_MATCH_PHRASE:-matched their expected admission outcome}"
 
 # shellcheck source=/dev/null
 source "${HERE}/${SUITE_LIB}"
@@ -139,7 +143,7 @@ jq -r '
 ' "${OUT_JSON}"
 
 echo "────────────────────────────────────────────────────────────────"
-echo "  ${PASS}/${TOTAL} ${SUITE_NOUN} matched their expected admission outcome"
+echo "  ${PASS}/${TOTAL} ${SUITE_NOUN} ${SUITE_MATCH_PHRASE}"
 echo "  (${FAIL} unexpected outcome, ${ERROR} not run or errored)"
 echo "  Cloud: ${CLOUD} · Run: $(jq -r '.run.run_url' "${OUT_JSON}")"
 echo "════════════════════════════════════════════════════════════════"
@@ -150,7 +154,7 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
   {
     echo "## ${SUITE_TITLE} — ${CLOUD}"
     echo ""
-    echo "${PASS}/${TOTAL} ${SUITE_NOUN} matched their expected admission outcome "
+    echo "${PASS}/${TOTAL} ${SUITE_NOUN} ${SUITE_MATCH_PHRASE} "
     echo "(${FAIL} unexpected, ${ERROR} not run or errored)."
     echo ""
     echo "| Case | Requirements | Expected | Observed | Blocked by | Outcome |"

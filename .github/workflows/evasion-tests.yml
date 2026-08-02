@@ -1,0 +1,753 @@
+name: Evasion Tests
+
+# ─────────────────────────────────────────────────────────────────────────────
+# EVASION TESTS — revision item 2.2.
+#
+# The attack suite asks whether the policies block the attacks they were built
+# to block. This suite asks where the enforcement boundary actually falls:
+#
+#   E1 — Signed by a DIFFERENT workflow of the same repo, on main   ADMIT  evaded
+#   E2 — Tag moved to unsigned content AFTER the pod was admitted   EVADED evaded
+#   E3 — Valid attestations replayed onto a different signed digest DENY   holds
+#   E4 — Signed on a ref other than refs/heads/main                 DENY   holds
+#
+# TWO OF THESE ARE PREDICTED TO SUCCEED AS ATTACKS. A row that matches its
+# prediction is not a green tick — every record carries a `control` field saying
+# whether a matched prediction means the control held or was evaded. Nothing in
+# this workflow's output should be quoted without it.
+#
+# WHICH CASES RUN DEPENDS ON THE REF, and that is a correctness constraint, not
+# a convenience. Every keyless signature minted in a run carries that run's ref
+# in its certificate SAN, and the policy pins @refs/heads/main. A run dispatched
+# from a branch cannot mint a compliant baseline artefact, so E1–E3 would fail
+# their preconditions for a reason unrelated to what they test.
+#
+#   dispatch on main      → E1, E2, E3
+#   dispatch on a branch  → E4
+#
+# Both dispatches are needed for a complete result set. The artefact records
+# which set it covered.
+#
+# No result here is written by hand. Each case records what it observed
+# (scripts/evasion-lib.sh) and scripts/evasion-summary.sh builds the summary and
+# the uploaded JSON/CSV from those records alone. A case that does not run is
+# reported as NOT_RUN, never as passing.
+# ─────────────────────────────────────────────────────────────────────────────
+
+on:
+  workflow_dispatch:
+    inputs:
+      cloud:
+        description: 'Which cloud to run the evasion tests on'
+        required: true
+        default: 'aws'
+        type: choice
+        options: [aws, azure, both]
+      toctou_timeout_seconds:
+        description: >-
+          E2 only. How long to wait for the kubelet to re-pull the moved tag
+          before recording the attempt as blocked. The container exits every
+          10 s and the kubelet backs off exponentially between restarts, so a
+          short value can record a timeout as a finding when it is impatience.
+        required: false
+        default: '300'
+        type: string
+
+# Shared with attack-simulations.yml and measure-admission-latency.yml: one
+# cluster, one evidence run at a time. E2 leaves a pod running for minutes and
+# would otherwise be measured by whatever else is probing the cluster.
+concurrency:
+  group: kyverno-cluster-${{ github.repository }}
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - id: set-matrix
+        run: |
+          CLOUD="${{ inputs.cloud }}"
+          if [ -z "${CLOUD}" ] || [ "${CLOUD}" = "both" ]; then
+            echo 'matrix={"include":[{"cloud":"aws"},{"cloud":"azure"}]}' >> $GITHUB_OUTPUT
+          else
+            echo "matrix={\"include\":[{\"cloud\":\"${CLOUD}\"}]}" >> $GITHUB_OUTPUT
+          fi
+
+  evasion:
+    name: Evasion (${{ matrix.cloud }})
+    runs-on: ubuntu-latest
+    environment: ${{ matrix.cloud }}
+    needs: setup
+
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.setup.outputs.matrix) }}
+
+    env:
+      CLOUD: ${{ matrix.cloud }}
+      RESULTS_DIR: /tmp/evasion-results
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      # ── Auth ──────────────────────────────────────────────────────────────
+
+      - name: Auth — AWS
+        if: matrix.cloud == 'aws'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+          role-session-name: evasion-${{ github.run_id }}
+
+      - name: Auth — Azure
+        if: matrix.cloud == 'azure'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # ── Registry login ────────────────────────────────────────────────────
+
+      - name: Registry login — ECR
+        if: matrix.cloud == 'aws'
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Registry login — ACR
+        if: matrix.cloud == 'azure'
+        run: az acr login --name "${{ secrets.ACR_LOGIN_SERVER }}"
+
+      - name: Set unified registry vars
+        run: |
+          if [ "${{ matrix.cloud }}" = "aws" ]; then
+            echo "REGISTRY=${{ steps.ecr-login.outputs.registry }}" >> $GITHUB_ENV
+            echo "REPO=${{ secrets.ECR_REPO_NAME }}"               >> $GITHUB_ENV
+          else
+            echo "REGISTRY=${{ secrets.ACR_LOGIN_SERVER }}"        >> $GITHUB_ENV
+            echo "REPO=${{ secrets.ACR_REPO_NAME }}"               >> $GITHUB_ENV
+          fi
+
+      # ── Kubeconfig ────────────────────────────────────────────────────────
+
+      - name: Kubeconfig — EKS
+        if: matrix.cloud == 'aws'
+        run: |
+          aws eks update-kubeconfig \
+            --region "${{ secrets.AWS_REGION }}" \
+            --name "${{ secrets.EKS_CLUSTER_NAME }}"
+
+      - name: Kubeconfig — AKS
+        if: matrix.cloud == 'azure'
+        run: |
+          az aks get-credentials \
+            --resource-group "${{ secrets.AKS_RESOURCE_GROUP }}" \
+            --name "${{ secrets.AKS_CLUSTER_NAME }}" \
+            --overwrite-existing
+
+      # ── Tools ─────────────────────────────────────────────────────────────
+      # crane is new here. E3 needs to copy one OCI artefact onto another tag
+      # without unpacking it — moving an attestation between digests is not
+      # something cosign or docker will do for you, which is rather the point.
+
+      - name: Install Cosign + Syft + crane
+        run: |
+          set -euo pipefail
+          curl -sSfL https://github.com/sigstore/cosign/releases/download/v2.2.3/cosign-linux-amd64 \
+            -o /usr/local/bin/cosign && chmod +x /usr/local/bin/cosign
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh \
+            | sh -s -- -b /usr/local/bin v0.105.1
+          curl -sSfL https://github.com/google/go-containerregistry/releases/download/v0.19.1/go-containerregistry_Linux_x86_64.tar.gz \
+            | tar -xz -C /usr/local/bin crane
+          chmod +x /usr/local/bin/crane
+          cosign version
+          syft version
+          crane version
+
+      # ── Preflight ─────────────────────────────────────────────────────────
+      # Same shape as the attack suite's, so the two artefacts carry the same
+      # `run` block and the dissertation's table renderer reads both. The suite
+      # is meaningless unless the policies are Enforce and Ready: an evasion
+      # that "succeeds" against a cluster that was not enforcing proves nothing.
+
+      - name: Preflight — record and verify enforcement state
+        id: preflight
+        run: |
+          set -euo pipefail
+          source scripts/evasion-lib.sh
+
+          echo "════════════════════════════════════════════════════"
+          echo "  Evasion Tests [${CLOUD}] — Preflight"
+          echo "  Ref: ${GITHUB_REF_NAME} → cases: ${SCENARIOS[*]%%|*}"
+          echo "════════════════════════════════════════════════════"
+
+          FAIL=0
+          POLICIES='[]'
+          for POLICY in verify-image-signature verify-sbom-cyclonedx verify-slsa-provenance; do
+            ACTION=$(kubectl get clusterpolicy "${POLICY}" \
+              -o jsonpath='{.spec.validationFailureAction}' 2>/dev/null || true)
+            READY=$(kubectl get clusterpolicy "${POLICY}" \
+              -o jsonpath='{.status.ready}' 2>/dev/null || true)
+            ACTION="${ACTION:-MISSING}"
+            READY="${READY:-false}"
+
+            if [ "${ACTION}" != "Enforce" ] || [ "${READY}" != "true" ]; then
+              echo "❌ ${POLICY}: action=${ACTION} ready=${READY}"
+              FAIL=1
+            else
+              echo "✅ ${POLICY}: Enforce, Ready"
+            fi
+
+            POLICIES=$(jq -c \
+              --arg name "${POLICY}" --arg action "${ACTION}" --arg ready "${READY}" \
+              '. + [{name: $name, validationFailureAction: $action, ready: $ready}]' \
+              <<< "${POLICIES}")
+          done
+
+          KYVERNO_IMAGE=$(kubectl get deployment kyverno-admission-controller -n kyverno \
+            -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || true)
+          KYVERNO_REPLICAS=$(kubectl get deployment kyverno-admission-controller -n kyverno \
+            -o jsonpath='{.status.readyReplicas}' 2>/dev/null || true)
+
+          # The identity the policy pins, read from the cluster rather than from
+          # this file. E1 and E4 are both claims about this string, so the
+          # artefact has to carry the string they were tested against.
+          PINNED_SUBJECT=$(kubectl get clusterpolicy verify-image-signature -o json 2>/dev/null \
+            | jq -r '[.spec.rules[]?.verifyImages[]?.attestors[]?.entries[]?.keyless?.subject]
+                     | map(select(. != null)) | unique | join(" ")' 2>/dev/null || true)
+
+          jq -n \
+            --argjson policies "${POLICIES}" \
+            --arg kyverno_image    "${KYVERNO_IMAGE:-unknown}" \
+            --arg kyverno_replicas "${KYVERNO_REPLICAS:-unknown}" \
+            --arg pinned_subject   "${PINNED_SUBJECT:-unknown}" \
+            --arg dispatched_ref   "${GITHUB_REF_NAME:-unknown}" \
+            --arg case_set         "$(printf '%s ' "${SCENARIOS[@]%%|*}" | sed 's/ $//')" \
+            --arg context "$(kubectl config current-context)" \
+            --argjson admission "$(bash scripts/webhook-state.sh)" \
+            '{
+               kubectl_context:        $context,
+               kyverno_image:          $kyverno_image,
+               kyverno_ready_replicas: $kyverno_replicas,
+               pinned_identity:        $pinned_subject,
+               dispatched_ref:         $dispatched_ref,
+               case_set:               $case_set,
+               admission:              $admission,
+               policies:               $policies
+             }' > "${RESULTS_DIR}/_preflight.json"
+
+          echo ""
+          echo "── Recorded enforcement state ──"
+          cat "${RESULTS_DIR}/_preflight.json"
+
+          if [ "${FAIL}" = "1" ]; then
+            echo ""
+            echo "ERROR: policies are not all Enforce+Ready — run the supply chain pipeline first."
+            echo "An evasion that 'succeeds' against a cluster that was not enforcing proves nothing."
+            exit 1
+          fi
+
+          kubectl create namespace supply-chain-demo \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      # ─────────────────────────────────────────────────────────────────────
+      # E1 — the workflow-path wildcard.
+      #
+      # The pinned identity is
+      #   https://github.com/<owner>/<repo>/.github/workflows/*@refs/heads/main
+      # The `*` is the whole case: it says "any workflow of this repository on
+      # main", not "the release pipeline". This workflow is a different workflow
+      # of the same repository on main, so its own OIDC identity should satisfy
+      # the policy — and everything it signs is admissible without the release
+      # pipeline ever having run.
+      #
+      # E1 runs FIRST because E2 and E3 both need a compliant baseline artefact
+      # signed by this workflow. If E1 is denied, their preconditions cannot be
+      # met and their aborts will say so rather than reporting a false success.
+      # ─────────────────────────────────────────────────────────────────────
+
+      - name: "E1 — Signed by a different workflow of the same repo (predict ADMIT)"
+        if: ${{ !cancelled() && steps.preflight.conclusion == 'success' && github.ref_name == 'main' }}
+        env:
+          GH_REPOSITORY:  ${{ github.repository }}
+          GH_REF_NAME:    ${{ github.ref_name }}
+          GH_SHA:         ${{ github.sha }}
+          GH_EVENT:       ${{ github.event_name }}
+          GH_WORKFLOW:    ${{ github.workflow }}
+          GH_RUN_ID:      ${{ github.run_id }}
+          GH_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          source scripts/evasion-lib.sh
+
+          TAG="evasion1-wildcard-${{ github.run_id }}"
+          IMAGE="${REGISTRY}/${REPO}:${TAG}"
+          echo "════════ E1 [${CLOUD}] — workflow-path wildcard ════════"
+
+          docker build -t "${IMAGE}" - <<DOCKERFILE
+          FROM alpine:3.19
+          LABEL threat="E1-wildcard-identity"
+          LABEL workflow="evasion-tests.yml"
+          CMD ["sh", "-c", "echo EVASION1"]
+          DOCKERFILE
+
+          DIGEST=$(push_and_digest "${IMAGE}")
+          REF="${REGISTRY}/${REPO}@${DIGEST}"
+
+          # Every artefact below is minted by THIS workflow, never by
+          # supply-chain-pipeline.yml. That is the attack.
+          cosign sign --yes "${REF}"
+          syft "${REF}" -o cyclonedx-json=/tmp/sbom-e1.json
+          cosign attest --yes --type cyclonedx --predicate /tmp/sbom-e1.json "${REF}"
+
+          FULL_IMAGE="${IMAGE}" \
+          BUILD_TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+          CLOUD="${CLOUD}" \
+          python3 scripts/gen_slsa_provenance.py
+          cosign attest --yes --type slsaprovenance1 --predicate provenance.json "${REF}"
+
+          # The SAN actually issued, read back from the transparency log entry
+          # rather than assumed from the workflow file name.
+          SAN=$(cosign verify \
+                  --certificate-identity-regexp "https://github.com/${{ github.repository }}.*" \
+                  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+                  --output json "${REF}" 2>/dev/null \
+                | jq -r '.[0].optional.Subject // empty' || true)
+          echo "Certificate identity issued to this workflow: ${SAN:-<unreadable>}"
+
+          probe evasion1 supply-chain-demo "${REF}"
+
+          EVIDENCE=$(jq -n \
+            --arg san "${SAN:-unknown}" \
+            --arg signing_workflow ".github/workflows/evasion-tests.yml" \
+            --arg release_workflow ".github/workflows/supply-chain-pipeline.yml" \
+            '{certificate_identity: $san,
+              signed_by:            $signing_workflow,
+              policy_expects:       $release_workflow,
+              note: "the pinned subject wildcards the workflow path, so any workflow of this repository on main can mint an admissible artefact"}')
+
+          record_evasion E1 "${PROBE_OUTCOME}" "${REF}" "${PROBE_MESSAGE}" \
+            "signed, SBOM-attested and provenance-attested entirely by evasion-tests.yml; the release pipeline never ran for this image" \
+            "${EVIDENCE}"
+
+      # ─────────────────────────────────────────────────────────────────────
+      # E2 — post-admission tag mutation. The centrepiece.
+      #
+      # A3 in the attack suite moves the tag BEFORE admission: Kyverno resolves
+      # the new digest and denies. This moves it AFTER, which is the window
+      # `mutateDigest: false` leaves open — §5.4 of the dissertation argues the
+      # policies avoid mutating the workload spec, and this measures what that
+      # costs.
+      #
+      # Sequence: admit a fully compliant image BY TAG, confirm what is running,
+      # move the tag to unsigned content, and watch what the kubelet pulls next.
+      # The pod object is never touched, so no admission review ever sees the
+      # substitution. The evidence for that is the pod's UID and creation
+      # timestamp being unchanged across the swap.
+      # ─────────────────────────────────────────────────────────────────────
+
+      - name: "E2 — Tag moved after admission (predict EVADED)"
+        if: ${{ !cancelled() && steps.preflight.conclusion == 'success' && github.ref_name == 'main' }}
+        timeout-minutes: 25
+        env:
+          GH_REPOSITORY:  ${{ github.repository }}
+          GH_REF_NAME:    ${{ github.ref_name }}
+          GH_SHA:         ${{ github.sha }}
+          GH_EVENT:       ${{ github.event_name }}
+          GH_WORKFLOW:    ${{ github.workflow }}
+          GH_RUN_ID:      ${{ github.run_id }}
+          GH_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          source scripts/evasion-lib.sh
+
+          TAG="evasion2-toctou-${{ github.run_id }}"
+          TAG_REF="${REGISTRY}/${REPO}:${TAG}"
+          NS=supply-chain-demo
+          POD=evasion2
+          TIMEOUT="${{ inputs.toctou_timeout_seconds }}"
+          # A non-numeric input would otherwise reach jq --argjson and take the
+          # whole step down after the cluster work was already done.
+          case "${TIMEOUT}" in
+            ''|*[!0-9]*) echo "toctou_timeout_seconds='${TIMEOUT}' is not a number — using 300"; TIMEOUT=300 ;;
+          esac
+          echo "════════ E2 [${CLOUD}] — post-admission tag redirection ════════"
+
+          # ---- v1: legitimate and fully attested ----
+          docker build -t "${TAG_REF}" - <<DOCKERFILE
+          FROM alpine:3.19
+          LABEL threat="E2-v1-legitimate"
+          RUN echo "EVASION2-V1-${{ github.run_id }}" > /opt/marker.txt
+          CMD ["sh", "-c", "cat /opt/marker.txt; sleep 10"]
+          DOCKERFILE
+
+          D1=$(push_and_digest "${TAG_REF}")
+          REF1="${REGISTRY}/${REPO}@${D1}"
+          echo "v1 pushed: D1=${D1}"
+
+          cosign sign --yes "${REF1}"
+          syft "${REF1}" -o cyclonedx-json=/tmp/sbom-e2.json
+          cosign attest --yes --type cyclonedx --predicate /tmp/sbom-e2.json "${REF1}"
+
+          FULL_IMAGE="${TAG_REF}" \
+          BUILD_TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+          CLOUD="${CLOUD}" \
+          python3 scripts/gen_slsa_provenance.py
+          cosign attest --yes --type slsaprovenance1 --predicate provenance.json "${REF1}"
+
+          # ---- admission, by tag ----
+          probe_pull_always "${POD}" "${NS}" "${TAG_REF}"
+          if [ "${PROBE_OUTCOME}" != "ADMIT" ]; then
+            abort_scenario E2 "${TAG_REF}" \
+              "the compliant v1 artefact was ${PROBE_OUTCOME}, so there is no admitted pod to attack: ${PROBE_MESSAGE}"
+          fi
+
+          if ! await_image_id "${POD}" "${NS}" 240; then
+            kubectl describe pod "${POD}" -n "${NS}" | tail -30 || true
+            abort_scenario E2 "${TAG_REF}" "the admitted pod never resolved an image, so nothing was running to substitute"
+          fi
+
+          UID_BEFORE=$(pod_field "${POD}" "${NS}" '{.metadata.uid}')
+          CREATED_BEFORE=$(pod_field "${POD}" "${NS}" '{.metadata.creationTimestamp}')
+          IMGID_BEFORE="${AWAIT_IMAGE_ID}"
+          RESTARTS_BEFORE=$(pod_field "${POD}" "${NS}" '{.status.containerStatuses[0].restartCount}')
+          LOG_BEFORE=$(kubectl logs "${POD}" -n "${NS}" --tail=5 2>/dev/null | tr '\n' ' ' || true)
+          echo "Admitted and running:"
+          echo "  imageID  : ${IMGID_BEFORE}"
+          echo "  log      : ${LOG_BEFORE}"
+
+          case "${IMGID_BEFORE}" in
+            *"${D1#sha256:}"*) : ;;
+            *) abort_scenario E2 "${TAG_REF}" \
+                 "the running container resolved to ${IMGID_BEFORE}, not the signed D1=${D1} — the baseline is not what was verified" ;;
+          esac
+
+          # ---- v2: different content, unsigned, same tag ----
+          docker build -t "${TAG_REF}" - <<DOCKERFILE
+          FROM alpine:3.19
+          LABEL threat="E2-v2-substituted"
+          RUN echo "EVASION2-V2-SUBSTITUTED-${{ github.run_id }}" > /opt/marker.txt
+          RUN echo "payload-${{ github.run_id }}" > /opt/backdoor.txt
+          CMD ["sh", "-c", "cat /opt/marker.txt; sleep 10"]
+          DOCKERFILE
+
+          D2=$(push_and_digest "${TAG_REF}")
+          echo "v2 pushed: D2=${D2}  (deliberately unsigned and unattested)"
+
+          if [ "${D1}" = "${D2}" ]; then
+            abort_scenario E2 "${TAG_REF}" "v2 produced the same digest as v1 — no substitution occurred"
+          fi
+
+          RESOLVED=$(resolve_tag_digest "${TAG_REF}")
+          if [ "${RESOLVED}" != "${D2}" ]; then
+            abort_scenario E2 "${TAG_REF}" \
+              "tag resolves to ${RESOLVED:-nothing}, expected ${D2} — the registry did not accept the tag move"
+          fi
+          MOVED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          echo "Tag moved to the unsigned D2 at ${MOVED_AT}; the pod has not been touched"
+
+          # ---- what does the kubelet pull next? ----
+          if await_image_change "${POD}" "${NS}" "${IMGID_BEFORE}" "${TIMEOUT}"; then
+            SWAPPED=true
+          else
+            SWAPPED=false
+          fi
+          IMGID_AFTER="${AWAIT_IMAGE_ID}"
+
+          UID_AFTER=$(pod_field "${POD}" "${NS}" '{.metadata.uid}')
+          CREATED_AFTER=$(pod_field "${POD}" "${NS}" '{.metadata.creationTimestamp}')
+          RESTARTS_AFTER=$(pod_field "${POD}" "${NS}" '{.status.containerStatuses[0].restartCount}')
+          LOG_AFTER=$(kubectl logs "${POD}" -n "${NS}" --tail=5 2>/dev/null | tr '\n' ' ' || true)
+          PULL_EVENTS=$(kubectl get events -n "${NS}" \
+            --field-selector "involvedObject.name=${POD},reason=Pulled" \
+            -o jsonpath='{range .items[*]}{.message}{"\n"}{end}' 2>/dev/null | tr '\n' ' ' || true)
+
+          echo "After the move:"
+          echo "  imageID  : ${IMGID_AFTER:-<unchanged>}"
+          echo "  log      : ${LOG_AFTER}"
+          echo "  restarts : ${RESTARTS_BEFORE} → ${RESTARTS_AFTER}"
+
+          # The pod object never changed, so no CREATE admission review saw the
+          # substitution. A changed UID would mean something recreated the pod
+          # and the whole observation would be about a second admission instead.
+          SAME_OBJECT=false
+          if [ -n "${UID_AFTER}" ] && [ "${UID_BEFORE}" = "${UID_AFTER}" ] \
+             && [ "${CREATED_BEFORE}" = "${CREATED_AFTER}" ]; then
+            SAME_OBJECT=true
+          fi
+
+          if [ "${SWAPPED}" = "true" ] && [ "${SAME_OBJECT}" = "true" ]; then
+            OBSERVED=EVADED
+          elif [ "${SWAPPED}" = "true" ]; then
+            OBSERVED=ERROR   # content changed, but so did the pod — not this test
+          else
+            OBSERVED=BLOCKED
+          fi
+
+          EVIDENCE=$(jq -n \
+            --arg d1 "${D1}" --arg d2 "${D2}" \
+            --arg imgid_before "${IMGID_BEFORE}" --arg imgid_after "${IMGID_AFTER:-}" \
+            --arg log_before "${LOG_BEFORE}" --arg log_after "${LOG_AFTER}" \
+            --arg uid_before "${UID_BEFORE}" --arg uid_after "${UID_AFTER}" \
+            --arg created_before "${CREATED_BEFORE}" --arg created_after "${CREATED_AFTER}" \
+            --arg moved_at "${MOVED_AT}" \
+            --arg pull_events "${PULL_EVENTS}" \
+            --argjson restarts_before "${RESTARTS_BEFORE:-0}" \
+            --argjson restarts_after "${RESTARTS_AFTER:-0}" \
+            --argjson window_seconds "${AWAIT_SECONDS}" \
+            --argjson timeout_seconds "${TIMEOUT}" \
+            --argjson content_changed "${SWAPPED}" \
+            --argjson same_pod_object "${SAME_OBJECT}" \
+            '{verified_digest:      $d1,
+              substituted_digest:   $d2,
+              image_id_at_admission: $imgid_before,
+              image_id_after_move:   $imgid_after,
+              log_at_admission:      $log_before,
+              log_after_move:        $log_after,
+              pod_uid_before:        $uid_before,
+              pod_uid_after:         $uid_after,
+              pod_created_before:    $created_before,
+              pod_created_after:     $created_after,
+              tag_moved_at:          $moved_at,
+              container_restarts:    {before: $restarts_before, after: $restarts_after},
+              seconds_from_move_to_substitution: $window_seconds,
+              wait_timeout_seconds:  $timeout_seconds,
+              content_changed:       $content_changed,
+              same_pod_object:       $same_pod_object,
+              pulled_events:         $pull_events}')
+
+          record_evasion E2 "${OBSERVED}" "${TAG_REF}" \
+            "pod ${NS}/${POD} was admitted against the signed ${D1} and re-pulled without any admission review" \
+            "verified D1=${D1}; tag moved to unsigned D2=${D2} after admission; same pod object: ${SAME_OBJECT}; substitution observed after ${AWAIT_SECONDS}s" \
+            "${EVIDENCE}"
+
+      # ─────────────────────────────────────────────────────────────────────
+      # E3 — attestation replay.
+      #
+      # X is fully compliant. Y is different content, correctly signed by the
+      # same identity, but never attested. X's attestation artefact is then
+      # copied onto Y's attestation tag, so Y appears to carry an SBOM and a
+      # provenance statement signed by the right identity — except the DSSE
+      # payload inside still names X's digest as its subject.
+      #
+      # The question is whether the subject binding is checked. If it is not,
+      # one compliant build launders every later image.
+      # ─────────────────────────────────────────────────────────────────────
+
+      - name: "E3 — Attestations replayed onto another digest (predict DENY)"
+        if: ${{ !cancelled() && steps.preflight.conclusion == 'success' && github.ref_name == 'main' }}
+        env:
+          GH_REPOSITORY:  ${{ github.repository }}
+          GH_REF_NAME:    ${{ github.ref_name }}
+          GH_SHA:         ${{ github.sha }}
+          GH_EVENT:       ${{ github.event_name }}
+          GH_WORKFLOW:    ${{ github.workflow }}
+          GH_RUN_ID:      ${{ github.run_id }}
+          GH_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          source scripts/evasion-lib.sh
+
+          BASE="${REGISTRY}/${REPO}"
+          echo "════════ E3 [${CLOUD}] — attestation replay ════════"
+
+          # ---- X: the donor, fully compliant ----
+          XIMAGE="${BASE}:evasion3-donor-${{ github.run_id }}"
+          docker build -t "${XIMAGE}" - <<DOCKERFILE
+          FROM alpine:3.19
+          LABEL threat="E3-donor"
+          CMD ["sh", "-c", "echo EVASION3-DONOR"]
+          DOCKERFILE
+          DX=$(push_and_digest "${XIMAGE}")
+          REFX="${BASE}@${DX}"
+
+          cosign sign --yes "${REFX}"
+          syft "${REFX}" -o cyclonedx-json=/tmp/sbom-e3.json
+          cosign attest --yes --type cyclonedx --predicate /tmp/sbom-e3.json "${REFX}"
+          FULL_IMAGE="${XIMAGE}" \
+          BUILD_TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+          CLOUD="${CLOUD}" \
+          python3 scripts/gen_slsa_provenance.py
+          cosign attest --yes --type slsaprovenance1 --predicate provenance.json "${REFX}"
+          echo "Donor X=${DX} is signed, SBOM-attested and provenance-attested"
+
+          # ---- Y: the target, signed but never attested ----
+          YIMAGE="${BASE}:evasion3-target-${{ github.run_id }}"
+          docker build -t "${YIMAGE}" - <<DOCKERFILE
+          FROM alpine:3.19
+          LABEL threat="E3-target"
+          RUN echo "different-content-${{ github.run_id }}" > /opt/other.txt
+          CMD ["sh", "-c", "echo EVASION3-TARGET"]
+          DOCKERFILE
+          DY=$(push_and_digest "${YIMAGE}")
+          REFY="${BASE}@${DY}"
+
+          if [ "${DX}" = "${DY}" ]; then
+            abort_scenario E3 "${REFY}" "donor and target share a digest — there is nothing to replay onto"
+          fi
+
+          cosign sign --yes "${REFY}"
+          echo "Target Y=${DY} is signed by the same identity, with no attestations of its own"
+
+          # ---- the replay ----
+          ATT_X="${BASE}:$(attestation_tag "${DX}")"
+          ATT_Y="${BASE}:$(attestation_tag "${DY}")"
+
+          if ! crane manifest "${ATT_X}" >/dev/null 2>&1; then
+            abort_scenario E3 "${REFY}" "no attestation artefact found at ${ATT_X} — cosign did not store it where expected"
+          fi
+          if crane manifest "${ATT_Y}" >/dev/null 2>&1; then
+            abort_scenario E3 "${REFY}" "the target already carries its own attestations — the replay would not be isolated"
+          fi
+
+          crane copy "${ATT_X}" "${ATT_Y}"
+
+          if ! crane manifest "${ATT_Y}" >/dev/null 2>&1; then
+            abort_scenario E3 "${REFY}" "the copy did not land — ${ATT_Y} still resolves to nothing"
+          fi
+          echo "Replayed X's attestations onto Y's attestation tag ${ATT_Y}"
+
+          # Diagnostic, not the verdict: does cosign itself catch the mismatch?
+          COSIGN_SAYS=$(cosign verify-attestation \
+            --type cyclonedx \
+            --certificate-identity-regexp "https://github.com/${{ github.repository }}.*" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "${REFY}" 2>&1 | tr '\n' ' ' | cut -c1-500 || true)
+          echo "cosign verify-attestation on the target: ${COSIGN_SAYS:0:300}"
+
+          probe evasion3 supply-chain-demo "${REFY}"
+
+          EVIDENCE=$(jq -n \
+            --arg dx "${DX}" --arg dy "${DY}" \
+            --arg att_x "${ATT_X}" --arg att_y "${ATT_Y}" \
+            --arg cosign "${COSIGN_SAYS}" \
+            '{donor_digest:        $dx,
+              target_digest:       $dy,
+              donor_attestation:   $att_x,
+              replayed_to:         $att_y,
+              cosign_verify_attestation_output: $cosign,
+              note: "the DSSE payload copied onto the target still names the donor digest as its subject"}')
+
+          record_evasion E3 "${PROBE_OUTCOME}" "${REFY}" "${PROBE_MESSAGE}" \
+            "target signed correctly; SBOM and provenance attestations copied verbatim from donor ${DX}" \
+            "${EVIDENCE}"
+
+      # ─────────────────────────────────────────────────────────────────────
+      # E4 — the ref half of the pinned identity.
+      #
+      # Only runs when the workflow was dispatched from a branch, because the
+      # signature it needs can only be minted by a run whose ref is not main.
+      # E1 shows the workflow path is a wildcard; this shows the ref is not.
+      # ─────────────────────────────────────────────────────────────────────
+
+      - name: "E4 — Signed on a non-main ref (predict DENY)"
+        if: ${{ !cancelled() && steps.preflight.conclusion == 'success' && github.ref_name != 'main' }}
+        env:
+          GH_REPOSITORY:  ${{ github.repository }}
+          GH_REF_NAME:    ${{ github.ref_name }}
+          GH_SHA:         ${{ github.sha }}
+          GH_EVENT:       ${{ github.event_name }}
+          GH_WORKFLOW:    ${{ github.workflow }}
+          GH_RUN_ID:      ${{ github.run_id }}
+          GH_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          source scripts/evasion-lib.sh
+
+          TAG="evasion4-branch-${{ github.run_id }}"
+          IMAGE="${REGISTRY}/${REPO}:${TAG}"
+          echo "════════ E4 [${CLOUD}] — signature from ${GITHUB_REF_NAME} ════════"
+
+          docker build -t "${IMAGE}" - <<DOCKERFILE
+          FROM alpine:3.19
+          LABEL threat="E4-branch-identity"
+          LABEL ref="${{ github.ref_name }}"
+          CMD ["sh", "-c", "echo EVASION4"]
+          DOCKERFILE
+
+          DIGEST=$(push_and_digest "${IMAGE}")
+          REF="${REGISTRY}/${REPO}@${DIGEST}"
+
+          # Fully attested on purpose: if this is denied, the ref is the only
+          # thing left that can explain it.
+          cosign sign --yes "${REF}"
+          syft "${REF}" -o cyclonedx-json=/tmp/sbom-e4.json
+          cosign attest --yes --type cyclonedx --predicate /tmp/sbom-e4.json "${REF}"
+
+          FULL_IMAGE="${IMAGE}" \
+          BUILD_TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+          CLOUD="${CLOUD}" \
+          python3 scripts/gen_slsa_provenance.py
+          cosign attest --yes --type slsaprovenance1 --predicate provenance.json "${REF}"
+
+          SAN=$(cosign verify \
+                  --certificate-identity-regexp "https://github.com/${{ github.repository }}.*" \
+                  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+                  --output json "${REF}" 2>/dev/null \
+                | jq -r '.[0].optional.Subject // empty' || true)
+          echo "Certificate identity issued on this branch: ${SAN:-<unreadable>}"
+
+          case "${SAN}" in
+            *"@refs/heads/main")
+              abort_scenario E4 "${REF}" \
+                "the certificate says refs/heads/main although the run is on ${GITHUB_REF_NAME} — the case cannot distinguish the ref" ;;
+          esac
+
+          probe evasion4 supply-chain-demo "${REF}"
+
+          EVIDENCE=$(jq -n \
+            --arg san "${SAN:-unknown}" \
+            --arg ref "${GITHUB_REF_NAME}" \
+            '{certificate_identity: $san,
+              dispatched_ref:       $ref,
+              note: "fully signed and attested; the ref is the only element of the pinned identity that differs"}')
+
+          record_evasion E4 "${PROBE_OUTCOME}" "${REF}" "${PROBE_MESSAGE}" \
+            "signed and fully attested by evasion-tests.yml running on ${GITHUB_REF_NAME}" \
+            "${EVIDENCE}"
+
+      # ── Summary and evidence artefact ─────────────────────────────────────
+
+      - name: Evasion summary
+        if: always()
+        run: |
+          set -euo pipefail
+          bash scripts/evasion-summary.sh || SUMMARY_RC=$?
+
+          echo ""
+          echo "Read the control field before quoting any of this: two of these"
+          echo "cases are predicted to succeed as attacks, and a matched"
+          echo "prediction there means the control was evaded, not that it held."
+
+          exit "${SUMMARY_RC:-0}"
+
+      - name: Upload evidence artefact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: evasion-results-${{ matrix.cloud }}
+          path: |
+            evasion-results-*.json
+            evasion-results-*.csv
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Cleanup
+        if: always()
+        run: |
+          # E2 deliberately leaves unsigned content running. Everything else was
+          # denied and never created. Cleanup must not add a failure of its own.
+          for pod in evasion1 evasion2 evasion3 evasion4; do
+            kubectl delete pod "${pod}" -n supply-chain-demo --ignore-not-found || true
+          done

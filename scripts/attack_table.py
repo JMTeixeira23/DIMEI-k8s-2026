@@ -17,7 +17,13 @@ Usage:
     python3 scripts/attack_table.py attack-results-aws.json attack-results-azure.json
     python3 scripts/attack_table.py --format markdown attack-results-*.json
     python3 scripts/attack_table.py --preset testcases testcase-results-aws.json
+    python3 scripts/attack_table.py --preset evasion   evasion-results-aws.json
     python3 scripts/attack_table.py fail-open.json fail-closed.json   # 1.3
+
+The evasion preset (revision item 2.2) adds a Control column, because a matched
+prediction in that suite does not mean the attempt was blocked — two of its
+cases are predicted to get through, and the column is what keeps the table from
+being read as another clean sweep.
 
 Columns are one per artefact, labelled by cluster. When two artefacts come from
 the same cluster — the fail-open / fail-closed comparison revision item 1.3
@@ -54,6 +60,24 @@ PRESETS = {
         "column":  "Test case",
         "idcol":   "ID",
     },
+    # The evasion suite is the one table where a matched prediction is not
+    # necessarily good news, so it gets an extra column saying which it is.
+    # Without it the table reads like the attack table and would be quoted as
+    # "n/n blocked", which is the opposite of what two of the rows show.
+    "evasion": {
+        "label":   "tab:evasion",
+        "caption": "Evasion attempt outcomes on {where}. The Control column "
+                   "states whether the predicted outcome represents the "
+                   "control holding or being evaded --- two of these attempts "
+                   "are expected to succeed. Every row is rendered from the "
+                   "evidence artefact uploaded by the evasion test run cited "
+                   "above.",
+        "noun":    "evasion attempts",
+        "column":  "Evasion attempt",
+        "idcol":   "Case",
+        "control": True,
+        "matched": "behaved as predicted",
+    },
 }
 
 OBSERVED_LABEL = {
@@ -61,6 +85,16 @@ OBSERVED_LABEL = {
     "ADMIT":   "Admitted",
     "ERROR":   "Error",
     "NOT_RUN": "Not run",
+    # Evasion suite: E2's verdict is not an admission outcome. The pod is
+    # admitted either way; what is recorded is whether the content running
+    # inside it was substituted afterwards.
+    "EVADED":  "Substituted",
+    "BLOCKED": "Not substituted",
+}
+
+CONTROL_LABEL = {
+    "holds":  "Holds",
+    "evaded": "Evaded",
 }
 
 
@@ -139,6 +173,18 @@ def escape(text):
     return text.replace("&", "\\&").replace("_", "\\_").replace("%", "\\%")
 
 
+def control_cell(scenario):
+    """What a matched prediction means for the control, for the evasion preset.
+
+    Absent on records the shared renderer synthesised for cases that never ran,
+    so a missing value is reported rather than assumed to be either one.
+    """
+    raw = scenario.get("control")
+    if not raw:
+        return "---"
+    return CONTROL_LABEL.get(raw, raw)
+
+
 def totals(doc):
     """Counts recomputed from the rows being rendered.
 
@@ -185,12 +231,16 @@ def render_latex(runs, order, preset):
     out.append("  \\centering")
     out.append("  \\caption{" + preset["caption"].format(where=where) + "}")
     out.append(f"  \\label{{{preset['label']}}}")
-    cols = " ".join(["p{1.4cm}"] + ["X"] + ["p{1.8cm}"] * (1 + 1 + len(labels)))
+    control = preset.get("control", False)
+    extra = 1 if control else 0
+    cols = " ".join(["p{1.4cm}"] + ["X"] + ["p{1.8cm}"] * (1 + 1 + extra + len(labels)))
     out.append(f"  \\begin{{tabularx}}{{\\textwidth}}{{{cols}}}")
     out.append("    \\toprule")
     header = [f"\\textbf{{{preset['idcol']}}}", f"\\textbf{{{preset['column']}}}",
-              "\\textbf{Requirements}", "\\textbf{Expected}"] + [
-                  f"\\textbf{{{escape(l)}}}" for l in labels]
+              "\\textbf{Requirements}", "\\textbf{Expected}"]
+    if control:
+        header.append("\\textbf{Control}")
+    header += [f"\\textbf{{{escape(l)}}}" for l in labels]
     out.append("    " + " & ".join(header) + " \\\\")
     out.append("    \\midrule")
 
@@ -201,18 +251,22 @@ def render_latex(runs, order, preset):
             escape(meta["title"]),
             escape(", ".join(meta["requirements"])),
             OBSERVED_LABEL.get(meta["expected_admission"], meta["expected_admission"]),
-        ] + [cell(by_label[l][sid], latex=True) for l in labels]
+        ]
+        if control:
+            row.append(control_cell(meta))
+        row += [cell(by_label[l][sid], latex=True) for l in labels]
         out.append("    " + " & ".join(row) + " \\\\")
 
     out.append("    \\bottomrule")
     out.append("  \\end{tabularx}")
     out.append("\\end{table}")
 
+    matched = preset.get("matched", "matched the expected admission outcome")
     for doc in runs:
         t = totals(doc)
         out.append(
-            f"% {doc['run']['_label']}: {t['pass']}/{t['total']} {preset['noun']} matched the "
-            f"expected admission outcome ({t['fail']} unexpected, {t['error']} not run or errored)"
+            f"% {doc['run']['_label']}: {t['pass']}/{t['total']} {preset['noun']} {matched} "
+            f"({t['fail']} unexpected, {t['error']} not run or errored)"
         )
     return "\n".join(out)
 
@@ -223,20 +277,28 @@ def render_markdown(runs, order, preset):
                 for doc in runs}
     first = {s["scenario"]: s for s in runs[0]["scenarios"]}
 
-    out = [f"| {preset['idcol']} | {preset['column']} | Requirements | Expected | "
-           + " | ".join(labels) + " |"]
-    out.append("|" + "---|" * (4 + len(labels)))
+    control = preset.get("control", False)
+    head = [preset["idcol"], preset["column"], "Requirements", "Expected"]
+    if control:
+        head.append("Control")
+    out = ["| " + " | ".join(head + labels) + " |"]
+    out.append("|" + "---|" * (len(head) + len(labels)))
     for sid in order:
         meta = first[sid]
         row = [sid, meta["title"], ", ".join(meta["requirements"]),
                OBSERVED_LABEL.get(meta["expected_admission"], meta["expected_admission"])]
+        if control:
+            row.append(control_cell(meta))
         row += [cell(by_label[l][sid], latex=False) for l in labels]
         out.append("| " + " | ".join(row) + " |")
     out.append("")
+    # The markdown footer has always been terser than the LaTeX one; the default
+    # keeps it that way so the existing presets render byte-identically.
+    matched = preset.get("matched", "as expected")
     for doc in runs:
         r, t = doc["run"], totals(doc)
         out.append(
-            f"{r['_label']}: {t['pass']}/{t['total']} as expected "
+            f"{r['_label']}: {t['pass']}/{t['total']} {matched} "
             f"({t['fail']} unexpected, {t['error']} not run or errored) — run {r['run_id']}"
         )
     return "\n".join(out)
