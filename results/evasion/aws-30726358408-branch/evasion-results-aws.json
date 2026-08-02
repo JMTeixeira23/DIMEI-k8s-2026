@@ -1,0 +1,76 @@
+{
+  "run": {
+    "cloud": "aws",
+    "run_id": "30726358408",
+    "run_attempt": "1",
+    "repository": "JMTeixeira23/DIMEI-k8s-2026",
+    "commit": "93d41eca6864389cbb4afa2ddfa8d80c637d8642",
+    "run_url": "https://github.com/JMTeixeira23/DIMEI-k8s-2026/actions/runs/30726358408",
+    "generated": "2026-08-02T01:04:25Z",
+    "kubectl_context": "arn:aws:eks:eu-west-1:812982728774:cluster/supply-chain-eks",
+    "kyverno_image": "ghcr.io/kyverno/kyverno:v1.11.4",
+    "kyverno_ready_replicas": "3",
+    "pinned_identity": "https://github.com/JMTeixeira23/DIMEI-k8s-2026/.github/workflows/*@refs/heads/main",
+    "dispatched_ref": "evasion-branch-test",
+    "case_set": "E4",
+    "admission": {
+      "configuration": "fail-open",
+      "policy_webhooks": "mutate.kyverno.svc-ignore=Ignore validate.kyverno.svc-ignore=Ignore",
+      "clusterpolicy_count": 3,
+      "other_kyverno_webhooks": "kyverno-cleanup-controller.kyverno.svc=Fail kyverno-cleanup-controller.kyverno.svc=Ignore kyverno-svc.kyverno.svc=Fail monitor-webhooks.kyverno.svc=Ignore mutate-policy.kyverno.svc=Fail validate-policy.kyverno.svc=Fail",
+      "webhook_timeout_seconds": "10",
+      "kyverno_ready_replicas": "3",
+      "kyverno_desired_replicas": "3",
+      "pod_disruption_budgets": "kyverno-admission-controller(minAvailable=2,allowed=1)"
+    },
+    "policies": [
+      {
+        "name": "verify-image-signature",
+        "validationFailureAction": "Enforce",
+        "ready": "true"
+      },
+      {
+        "name": "verify-sbom-cyclonedx",
+        "validationFailureAction": "Enforce",
+        "ready": "true"
+      },
+      {
+        "name": "verify-slsa-provenance",
+        "validationFailureAction": "Enforce",
+        "ready": "true"
+      }
+    ]
+  },
+  "totals": {
+    "total": 1,
+    "pass": 1,
+    "fail": 0,
+    "error": 0
+  },
+  "scenarios": [
+    {
+      "scenario": "E4",
+      "title": "Signature and attestations minted on a ref other than refs/heads/main",
+      "cloud": "aws",
+      "run_id": "30726358408",
+      "requirements": [
+        "SR-01"
+      ],
+      "expected_admission": "DENY",
+      "observed_admission": "DENY",
+      "outcome": "PASS",
+      "expected_rule": "verify-image-signature/check-image-signature",
+      "observed_rule": "verify-image-signature/check-image-signature,verify-sbom-cyclonedx/check-sbom-cyclonedx,verify-slsa-provenance/check-slsa-provenance",
+      "image": "812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world@sha256:82f6b7136f67dc60c0224d3ca9e4e5d907e8331982488668c36352389b3914d4",
+      "detail": "signed and fully attested by evasion-tests.yml running on evasion-branch-test",
+      "message": "Error from server: admission webhook \"mutate.kyverno.svc-ignore\" denied the request: resource Pod/supply-chain-demo/evasion4 was blocked due to the following policies verify-image-signature: check-image-signature: 'failed to verify image 812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world@sha256:82f6b7136f67dc60c0224d3ca9e4e5d907e8331982488668c36352389b3914d4: .attestors[0].entries[0].keyless: subject mismatch: expected https://github.com/JMTeixeira23/DIMEI-k8s-2026/.github/workflows/*@refs/heads/main, received https://github.com/JMTeixeira23/DIMEI-k8s-2026/.github/workflows/evasion-tests.yml@refs/heads/evasion-branch-test' verify-sbom-cyclonedx: check-sbom-cyclonedx: 'failed to verify image 812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world@sha256:82f6b7136f67dc60c0224d3ca9e4e5d907e8331982488668c36352389b3914d4: .attestors[0].entries[0].keyless: subject mismatch: expected https://github.com/JMTeixeira23/DIMEI-k8s-2026/.github/workflows/*@refs/heads/main, received https://github.com/JMTeixeira23/DIMEI-k8s-2026/.github/workflows/evasion-tests.yml@refs/heads/evasion-branch-test' verify-slsa-provenance: check-slsa-provenance: 'failed to verify image 812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world@sha256:82f6b7136f67dc60c0224d3ca9e4e5d907e8331982488668c36352389b3914d4: .attestors[0].entries[0].keyless: subject mismatch: expected https://github.com/JMTeixeira23/DIMEI-k8s-2026/.github/workflows/*@refs/heads/main, received h",
+      "timestamp": "2026-08-02T01:04:25Z",
+      "control": "holds",
+      "evidence": {
+        "certificate_identity": "https://github.com/JMTeixeira23/DIMEI-k8s-2026/.github/workflows/evasion-tests.yml@refs/heads/evasion-branch-test",
+        "dispatched_ref": "evasion-branch-test",
+        "note": "fully signed and attested; the ref is the only element of the pinned identity that differs"
+      }
+    }
+  ]
+}

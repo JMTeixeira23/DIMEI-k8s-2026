@@ -66,12 +66,15 @@ PRESETS = {
     # "n/n blocked", which is the opposite of what two of the rows show.
     "evasion": {
         "label":   "tab:evasion",
-        "caption": "Evasion attempt outcomes on {where}. The Control column "
-                   "states whether the predicted outcome represents the "
-                   "control holding or being evaded --- two of these attempts "
-                   "are expected to succeed. Every row is rendered from the "
-                   "evidence artefact uploaded by the evasion test run cited "
-                   "above.",
+        # Deliberately says nothing about how many attempts succeed: the suite
+        # is dispatched twice over different case sets, so a caption that counts
+        # them is wrong on at least one of the two tables it appears under.
+        "caption": "Evasion attempt outcomes on {where}. Unlike the attack "
+                   "simulations, a met prediction here does not imply the "
+                   "control worked --- the Control column states whether the "
+                   "predicted outcome represents the control holding or being "
+                   "evaded. Every row is rendered from the evidence artefact "
+                   "uploaded by the evasion test run cited above.",
         "noun":    "evasion attempts",
         "column":  "Evasion attempt",
         "idcol":   "Case",
@@ -229,7 +232,10 @@ def render_latex(runs, order, preset):
     where = " and ".join(dict.fromkeys(labels))
     out.append("\\begin{table}[htbp]")
     out.append("  \\centering")
-    out.append("  \\caption{" + preset["caption"].format(where=where) + "}")
+    # str.replace, not str.format: a caption passed on the command line is
+    # LaTeX, and every \texttt{...} or \ref{...} in it is a brace that format()
+    # reads as a field name and dies on.
+    out.append("  \\caption{" + preset["caption"].replace("{where}", where) + "}")
     out.append(f"  \\label{{{preset['label']}}}")
     control = preset.get("control", False)
     extra = 1 if control else 0
