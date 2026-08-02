@@ -1,0 +1,152 @@
+{
+  "cloud": "aws",
+  "environment": {
+    "cloud": "aws",
+    "probe_image": "812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world@sha256:4581cb15e39e9884f215d7681ad629006059f7becff2046c7f97cbe0a912cbe7",
+    "probe_namespace": "supply-chain-demo",
+    "experiment": "admission cost under concurrent pod creation",
+    "concurrency_levels": "1 5 10 25 50",
+    "requests_per_level": "50",
+    "runner": "4 vCPU, 15989 MB",
+    "admission": {
+      "configuration": "fail-open",
+      "policy_webhooks": "mutate.kyverno.svc-ignore=Ignore validate.kyverno.svc-ignore=Ignore",
+      "clusterpolicy_count": 3,
+      "other_kyverno_webhooks": "kyverno-cleanup-controller.kyverno.svc=Fail kyverno-cleanup-controller.kyverno.svc=Ignore kyverno-svc.kyverno.svc=Fail monitor-webhooks.kyverno.svc=Ignore mutate-policy.kyverno.svc=Fail validate-policy.kyverno.svc=Fail",
+      "webhook_timeout_seconds": "10",
+      "kyverno_ready_replicas": "3",
+      "kyverno_desired_replicas": "3",
+      "pod_disruption_budgets": "kyverno-admission-controller(minAvailable=2,allowed=1)"
+    },
+    "run_url": "https://github.com/JMTeixeira23/DIMEI-k8s-2026/actions/runs/30722911694",
+    "generated": "2026-08-01T23:14:37Z"
+  },
+  "method": {
+    "in_webhook_cost": "Kyverno admission_review histogram, delta_sum/delta_count summed across replicas; undefined for baseline because no webhook runs",
+    "request_cost": "client-side wall clock per create request; includes constant kubectl startup and network round trip",
+    "percentiles": "nearest-rank on observed samples, no interpolation",
+    "probe": "unschedulable pods in the policy-matched namespace, so admission is exercised without image pull or scheduling"
+  },
+  "conditions": [
+    {
+      "condition": "conc-001",
+      "requests_sent": 50,
+      "request_cost": {
+        "n": 50,
+        "min_ms": 2588,
+        "p50_ms": 2659,
+        "p95_ms": 2762,
+        "p99_ms": 2768,
+        "max_ms": 2768,
+        "mean_ms": 2666.5,
+        "stdev_ms": 44.95
+      },
+      "rejected_requests": 0,
+      "in_webhook_cost": {
+        "admission_reviews": 100.0,
+        "reviews_per_request": 2.0,
+        "mean_per_review_ms": 23.613,
+        "per_request_ms": 47.226,
+        "total_seconds": 2.3613
+      },
+      "policy_breakdown": []
+    },
+    {
+      "condition": "conc-005",
+      "requests_sent": 50,
+      "request_cost": {
+        "n": 50,
+        "min_ms": 3541,
+        "p50_ms": 3989,
+        "p95_ms": 4169,
+        "p99_ms": 5353,
+        "max_ms": 5353,
+        "mean_ms": 3984.86,
+        "stdev_ms": 249.23
+      },
+      "rejected_requests": 0,
+      "in_webhook_cost": {
+        "admission_reviews": 100.0,
+        "reviews_per_request": 2.0,
+        "mean_per_review_ms": 41.478,
+        "per_request_ms": 82.955,
+        "total_seconds": 4.1478
+      },
+      "policy_breakdown": []
+    },
+    {
+      "condition": "conc-010",
+      "requests_sent": 50,
+      "request_cost": {
+        "n": 50,
+        "min_ms": 5669,
+        "p50_ms": 6602,
+        "p95_ms": 6861,
+        "p99_ms": 7064,
+        "max_ms": 7064,
+        "mean_ms": 6516.1,
+        "stdev_ms": 333.76
+      },
+      "rejected_requests": 0,
+      "in_webhook_cost": {
+        "admission_reviews": 100.0,
+        "reviews_per_request": 2.0,
+        "mean_per_review_ms": 44.476,
+        "per_request_ms": 88.952,
+        "total_seconds": 4.4476
+      },
+      "policy_breakdown": []
+    },
+    {
+      "condition": "conc-025",
+      "requests_sent": 50,
+      "request_cost": {
+        "n": 50,
+        "min_ms": 13315,
+        "p50_ms": 15970,
+        "p95_ms": 16418,
+        "p99_ms": 16428,
+        "max_ms": 16428,
+        "mean_ms": 15690.72,
+        "stdev_ms": 724.44
+      },
+      "rejected_requests": 0,
+      "in_webhook_cost": {
+        "admission_reviews": 100.0,
+        "reviews_per_request": 2.0,
+        "mean_per_review_ms": 39.975,
+        "per_request_ms": 79.949,
+        "total_seconds": 3.9975
+      },
+      "policy_breakdown": []
+    },
+    {
+      "condition": "conc-050",
+      "requests_sent": 50,
+      "request_cost": {
+        "n": 50,
+        "min_ms": 30948,
+        "p50_ms": 32577,
+        "p95_ms": 37883,
+        "p99_ms": 37923,
+        "max_ms": 37923,
+        "mean_ms": 33154.98,
+        "stdev_ms": 2142.99
+      },
+      "rejected_requests": 0,
+      "in_webhook_cost": {
+        "admission_reviews": 100.0,
+        "reviews_per_request": 2.0,
+        "mean_per_review_ms": 73.661,
+        "per_request_ms": 147.323,
+        "total_seconds": 7.3661
+      },
+      "policy_breakdown": []
+    }
+  ],
+  "comparisons": {
+    "enforce_vs_baseline_request_cost": null,
+    "enforce_vs_audit_request_cost": null,
+    "audit_vs_baseline_request_cost": null
+  }
+}

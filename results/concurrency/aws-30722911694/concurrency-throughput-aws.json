@@ -1,0 +1,52 @@
+[
+  {
+    "condition": "conc-001",
+    "concurrency": 1,
+    "batches": 50,
+    "requests": 50,
+    "accepted": 50,
+    "rejected": 0,
+    "wall_ms_total": 133549,
+    "throughput_admissions_per_s": 0.37
+  },
+  {
+    "condition": "conc-005",
+    "concurrency": 5,
+    "batches": 10,
+    "requests": 50,
+    "accepted": 50,
+    "rejected": 0,
+    "wall_ms_total": 42549,
+    "throughput_admissions_per_s": 1.18
+  },
+  {
+    "condition": "conc-010",
+    "concurrency": 10,
+    "batches": 5,
+    "requests": 50,
+    "accepted": 50,
+    "rejected": 0,
+    "wall_ms_total": 34310,
+    "throughput_admissions_per_s": 1.46
+  },
+  {
+    "condition": "conc-025",
+    "concurrency": 25,
+    "batches": 2,
+    "requests": 50,
+    "accepted": 50,
+    "rejected": 0,
+    "wall_ms_total": 32714,
+    "throughput_admissions_per_s": 1.53
+  },
+  {
+    "condition": "conc-050",
+    "concurrency": 50,
+    "batches": 1,
+    "requests": 50,
+    "accepted": 50,
+    "rejected": 0,
+    "wall_ms_total": 37993,
+    "throughput_admissions_per_s": 1.32
+  }
+]
