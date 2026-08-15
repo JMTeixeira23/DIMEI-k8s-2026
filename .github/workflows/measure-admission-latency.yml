@@ -732,6 +732,20 @@ jobs:
             exit 1
           fi
 
+          # The size experiment is as cache-sensitive as the policy matrix, and
+          # for a worse reason: each size is a distinct digest, so whether a
+          # condition is warm depends entirely on what ran before it. Run
+          # 31894106144 recorded 3.2 / 3.4 / 42.1 ms per review and looked like a
+          # size curve; the per-request timings showed small and medium had no
+          # cold sample at all and large had exactly one. Without this field the
+          # artefact cannot say which regime it measured (defect D37).
+          SZ_ARGS=$(kubectl get deployment kyverno-admission-controller -n kyverno \
+            -o jsonpath='{.spec.template.spec.containers[0].args}' 2>/dev/null || echo '')
+          SZ_CACHE=$(printf '%s' "${SZ_ARGS}" \
+            | grep -o -- '--imageVerifyCacheEnabled=[A-Za-z]*' | head -1 | cut -d= -f2)
+          SZ_CACHE="${SZ_CACHE:-default-for-build}"
+          echo "  image verification cache: enabled=${SZ_CACHE}"
+
           jq -n \
             --arg cloud "${CLOUD}" \
             --arg kyverno_image "$(kubectl get deployment kyverno-admission-controller \
@@ -739,6 +753,8 @@ jobs:
             --arg replicas "$(kubectl get deployment kyverno-admission-controller \
               -n kyverno -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo unknown)" \
             --arg namespace "${NAMESPACE}" \
+            --arg cache_enabled "${SZ_CACHE}" \
+            --arg args "${SZ_ARGS}" \
             --arg run_url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
             --arg generated "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --argjson images "$(cat /tmp/size-refs/_sizes.json)" \
@@ -746,6 +762,8 @@ jobs:
             '{cloud: $cloud, kyverno_image: $kyverno_image,
               kyverno_ready_replicas: $replicas, probe_namespace: $namespace,
               experiment: "image size vs admission cost",
+              image_verify_cache_enabled: $cache_enabled,
+              admission_controller_args: $args,
               images: $images, admission: $admission,
               run_url: $run_url, generated: $generated}' \
             > "${RESULTS_DIR}/_environment.json"
