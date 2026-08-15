@@ -515,7 +515,7 @@ jobs:
 
       - name: Install Cosign and Syft
         run: |
-          curl -sSfL https://github.com/sigstore/cosign/releases/download/v3.1.2/cosign-linux-amd64 \
+          curl -sSfL https://github.com/sigstore/cosign/releases/download/v2.6.5/cosign-linux-amd64 \
             -o /usr/local/bin/cosign && chmod +x /usr/local/bin/cosign
           # Syft, pinned by release archive rather than by piping an
           # installer from a mutable branch into a shell -- the pattern

@@ -92,9 +92,9 @@ fi
 
 row "Kyverno (versions.env)" "${pin_kyverno}"       "${lat_kyverno}"  "UNDER TEST" \
     "one pin, read by both bootstraps and set-failure-policy.sh"
-row "Cosign (workflows)"    "${pin_cosign}"          "${lat_cosign}"   "UNDER TEST" \
-    "produces the signatures Kyverno verifies"
-row "Cosign (installer)"    "${pin_cosign_action}"   "${lat_cosign}"   "UNDER TEST" \
+row "Cosign (workflows)"    "${pin_cosign}"          "${lat_cosign}"   "HELD at 2.x" \
+    "3.x writes OCI referrers Kyverno cannot read — D32, deliberate"
+row "Cosign (installer)"    "${pin_cosign_action}"   "${lat_cosign}"   "HELD at 2.x" \
     "same binary, pipeline path"
 row "cosign-installer tag"  "${pin_cosign_installer}" "${lat_cosign_installer}" "harness" \
     "must match the cosign major it fetches: v3 line cannot install cosign 3.x"
@@ -135,11 +135,21 @@ STALE
   Every evidence artefact records the Kyverno image it ran against
   (run.kyverno_image), so any single artefact can be checked against this table.
 
-  ⚠️ Cosign 3.x is a MAJOR change from the 2.2.3 the committed results used.
-     The first pipeline run after the upgrade must confirm that Kyverno still
-     verifies what Cosign produces — signature and attestation storage formats
-     are exactly what changed between those majors. TC-01 is the canary: if it
-     is denied, the two tools no longer agree and that is the finding, not a
-     bug to work around silently.
+  🔒 COSIGN IS HELD AT 2.x ON PURPOSE — this table will keep showing a newer
+     3.x upstream, and that gap is a result rather than neglect.
+
+     Measured on 2026-08-15 (run 31884945589, defect D32): Cosign v3.1.2 signs
+     and attests successfully, \`cosign verify\` passes, and \`cosign tree\`
+     reports every artefact stored "via OCI referrer". Kyverno v1.18.2 reads the
+     legacy sha256-<digest>.sig / .att tags, which are absent (404), and denies
+     with "no signatures found" on all three policies.
+
+     Cosign 3.0 turned on the protobuf bundle format, OCI 1.1 referring
+     artifacts and TUF-provided service URLs by default, and removed the
+     --new-bundle-format flag. \`cosign sign\` keeps --registry-referrers-mode,
+     but \`cosign attest\` does not — so no flag combination satisfies the two
+     attestation policies, and policies/verify-*.yaml is not editable.
+
+     Do NOT close this gap by bumping to 3.x. See changes.md §21.
 NOTE
 fi

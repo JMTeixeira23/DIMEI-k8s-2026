@@ -173,11 +173,16 @@ jobs:
       # stopped publishing detached `.sig` files and publishes `.sigstore.json`
       # keyless bundles instead. The v3 installer line only knows how to fetch
       # `.sig`, so it 404s (curl exit 22) on any 3.x release. The v4 line branches
-      # on the bundle. Defect D28.
+      # on the major and handles both. Defect D28.
+      #
+      # Cosign itself is held at 2.x on purpose — Cosign 3 stores signatures and
+      # attestations as OCI 1.1 referring artifacts, which Kyverno v1.18.2 does
+      # not read, and `cosign attest` has no flag to opt out. Defect D32; the
+      # full argument is in versions.env. Do not bump this to 3.x.
       - name: Install Cosign
         uses: sigstore/cosign-installer@v4.1.2
         with:
-          cosign-release: v3.1.2
+          cosign-release: v2.6.5
 
       - name: Sign image
         run: |
