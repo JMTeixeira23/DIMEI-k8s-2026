@@ -1,0 +1,146 @@
+{
+  "run": {
+    "cloud": "aws",
+    "run_id": "31888272847",
+    "run_attempt": "1",
+    "repository": "JMTeixeira23/DIMEI-k8s-2026",
+    "commit": "f5d638be57eeea35adc8f4128ad11bfc8b43b154",
+    "run_url": "https://github.com/JMTeixeira23/DIMEI-k8s-2026/actions/runs/31888272847",
+    "generated": "2026-08-15T13:53:28Z",
+    "kubectl_context": "arn:aws:eks:eu-west-1:812982728774:cluster/supply-chain-eks",
+    "kyverno_image": "reg.kyverno.io/kyverno/kyverno:v1.18.2",
+    "kyverno_ready_replicas": "3",
+    "pinned_identity": "https://github.com/JMTeixeira23/DIMEI-k8s-2026/.github/workflows/*@refs/heads/main",
+    "dispatched_ref": "main",
+    "case_set": "E1 E2 E3",
+    "admission": {
+      "configuration": "fail-open",
+      "policy_webhooks": "mutate.kyverno.svc-ignore=Ignore validate.kyverno.svc-ignore=Ignore",
+      "clusterpolicy_count": 3,
+      "other_kyverno_webhooks": "kyverno-cleanup-controller.kyverno.svc=Fail kyverno-cleanup-controller.kyverno.svc=Ignore kyverno-svc.kyverno.svc=Fail monitor-webhooks.kyverno.svc=Ignore mutate-policy.kyverno.svc=Fail validate-policy.kyverno.svc=Fail",
+      "webhook_timeout_seconds": "10",
+      "kyverno_ready_replicas": "3",
+      "kyverno_desired_replicas": "3",
+      "pod_disruption_budgets": "kyverno-admission-controller(minAvailable=2,allowed=1)"
+    },
+    "policies": [
+      {
+        "name": "verify-image-signature",
+        "validationFailureAction": "Enforce",
+        "ready": "true"
+      },
+      {
+        "name": "verify-sbom-cyclonedx",
+        "validationFailureAction": "Enforce",
+        "ready": "true"
+      },
+      {
+        "name": "verify-slsa-provenance",
+        "validationFailureAction": "Enforce",
+        "ready": "true"
+      }
+    ]
+  },
+  "totals": {
+    "total": 3,
+    "pass": 3,
+    "fail": 0,
+    "error": 0
+  },
+  "scenarios": [
+    {
+      "scenario": "E1",
+      "title": "Signature and attestations minted by a different workflow of the same repository on main",
+      "cloud": "aws",
+      "run_id": "31888272847",
+      "requirements": [
+        "SR-01"
+      ],
+      "expected_admission": "ADMIT",
+      "observed_admission": "ADMIT",
+      "outcome": "PASS",
+      "expected_rule": "none — the pinned identity's workflow path is a wildcard",
+      "observed_rule": "",
+      "image": "812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world@sha256:82adca42ffd19447085c18fd02b356ec387f004e12a59fd1a943ea5a90ea6648",
+      "detail": "signed, SBOM-attested and provenance-attested entirely by evasion-tests.yml; the release pipeline never ran for this image",
+      "message": "pod/evasion1 created",
+      "timestamp": "2026-08-15T13:51:34Z",
+      "control": "evaded",
+      "evidence": {
+        "certificate_identity": "https://github.com/JMTeixeira23/DIMEI-k8s-2026/.github/workflows/evasion-tests.yml@refs/heads/main",
+        "signed_by": ".github/workflows/evasion-tests.yml",
+        "policy_expects": ".github/workflows/supply-chain-pipeline.yml",
+        "note": "the pinned subject wildcards the workflow path, so any workflow of this repository on main can mint an admissible artefact"
+      }
+    },
+    {
+      "scenario": "E2",
+      "title": "Tag moved to unsigned content after the pod was admitted (post-admission TOCTOU)",
+      "cloud": "aws",
+      "run_id": "31888272847",
+      "requirements": [
+        "SR-02"
+      ],
+      "expected_admission": "EVADED",
+      "observed_admission": "EVADED",
+      "outcome": "PASS",
+      "expected_rule": "none — no admission review occurs when the kubelet re-pulls",
+      "observed_rule": "",
+      "image": "812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world:evasion2-toctou-31888272847",
+      "detail": "verified D1=sha256:d52bdb6cdf711bbd1347bcb0b37972f07aba721f48d46d1618c9ad6aeaf0345e; tag moved to unsigned D2=sha256:78944c5bac877262589b18c8a3124c196ab7ba346922075a410471748719a810 after admission; same pod object: true; substitution observed after 14s",
+      "message": "pod supply-chain-demo/evasion2 was admitted against the signed sha256:d52bdb6cdf711bbd1347bcb0b37972f07aba721f48d46d1618c9ad6aeaf0345e and re-pulled without any admission review",
+      "timestamp": "2026-08-15T13:52:45Z",
+      "control": "evaded",
+      "evidence": {
+        "verified_digest": "sha256:d52bdb6cdf711bbd1347bcb0b37972f07aba721f48d46d1618c9ad6aeaf0345e",
+        "substituted_digest": "sha256:78944c5bac877262589b18c8a3124c196ab7ba346922075a410471748719a810",
+        "image_id_at_admission": "812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world@sha256:d52bdb6cdf711bbd1347bcb0b37972f07aba721f48d46d1618c9ad6aeaf0345e",
+        "image_id_after_move": "812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world@sha256:78944c5bac877262589b18c8a3124c196ab7ba346922075a410471748719a810",
+        "log_at_admission": "EVASION2-V1-31888272847 ",
+        "log_after_move": "EVASION2-V2-SUBSTITUTED-31888272847 ",
+        "pod_uid_before": "684c9223-f6db-4a56-b623-8421ef6b299c",
+        "pod_uid_after": "684c9223-f6db-4a56-b623-8421ef6b299c",
+        "pod_created_before": "2026-08-15T13:52:04Z",
+        "pod_created_after": "2026-08-15T13:52:04Z",
+        "tag_moved_at": "2026-08-15T13:52:25Z",
+        "container_restarts": {
+          "before": 0,
+          "after": 2
+        },
+        "seconds_from_move_to_substitution": 14,
+        "wait_timeout_seconds": 300,
+        "content_changed": true,
+        "same_pod_object": true,
+        "pulled_events": "Successfully pulled image \"812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world:evasion2-toctou-31888272847\" in 321ms (321ms including waiting). Image size: 3421956 bytes. Successfully pulled image \"812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world:evasion2-toctou-31888272847\" in 99ms (99ms including waiting). Image size: 3421956 bytes. Successfully pulled image \"812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world:evasion2-toctou-31888272847\" in 395ms (395ms including waiting). Image size: 3422591 bytes. "
+      }
+    },
+    {
+      "scenario": "E3",
+      "title": "Valid attestations replayed onto a different, correctly signed digest",
+      "cloud": "aws",
+      "run_id": "31888272847",
+      "requirements": [
+        "SR-03",
+        "SR-04"
+      ],
+      "expected_admission": "DENY",
+      "observed_admission": "DENY",
+      "outcome": "PASS",
+      "expected_rule": "verify-sbom-cyclonedx/check-sbom-cyclonedx",
+      "observed_rule": "verify-sbom-cyclonedx/check-sbom-cyclonedx,verify-slsa-provenance/check-slsa-provenance",
+      "image": "812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world@sha256:6d16c1a3d119ca4bbd2f54e66096f178c5bcffb5187f37eef0e439e8de8695a1",
+      "detail": "target signed correctly; SBOM and provenance attestations copied verbatim from donor sha256:4352490a35646ec2cf7e7defd642f76b27577420f23b2b25b9c7d4aadd02cd9e",
+      "message": "Error from server: admission webhook \"mutate.kyverno.svc-ignore\" denied the request: resource Pod/supply-chain-demo/evasion3 was blocked due to the following policies verify-sbom-cyclonedx: check-sbom-cyclonedx: |- image attestations verification failed, verifiedCount: 0, requiredCount: 1, error: no matching attestations: no matching subject digest found no matching subject digest found verify-slsa-provenance: check-slsa-provenance: |- image attestations verification failed, verifiedCount: 0, requiredCount: 1, error: no matching attestations: no matching subject digest found no matching subject digest found",
+      "timestamp": "2026-08-15T13:53:28Z",
+      "control": "holds",
+      "evidence": {
+        "donor_digest": "sha256:4352490a35646ec2cf7e7defd642f76b27577420f23b2b25b9c7d4aadd02cd9e",
+        "target_digest": "sha256:6d16c1a3d119ca4bbd2f54e66096f178c5bcffb5187f37eef0e439e8de8695a1",
+        "donor_attestation": "812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world:sha256-4352490a35646ec2cf7e7defd642f76b27577420f23b2b25b9c7d4aadd02cd9e.att",
+        "replayed_to": "812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world:sha256-6d16c1a3d119ca4bbd2f54e66096f178c5bcffb5187f37eef0e439e8de8695a1.att",
+        "cosign_verify_attestation_output": "Error: no matching attestations: no matching subject digest found  no matching subject digest found error during command execution: no matching attestations: no matching subject digest found  no matching subject digest found ",
+        "note": "the DSSE payload copied onto the target still names the donor digest as its subject"
+      }
+    }
+  ]
+}

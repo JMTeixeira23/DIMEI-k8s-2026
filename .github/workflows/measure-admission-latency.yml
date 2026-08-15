@@ -237,11 +237,15 @@ jobs:
           else
             REGISTRY="${{ secrets.ACR_LOGIN_SERVER }}"
             REPO="${{ secrets.ACR_REPO_NAME }}"
+            # Allowlist only. The trailing blocklist that used to follow this
+            # was already dead — nothing matching ^[a-f0-9]+-[0-9]+$ can start
+            # with attack/size-/tc04/lat- — and leaving it there implied the
+            # allowlist was not sufficient on its own, which is the confusion
+            # that produced the AWS blocklist and defect D35.
             TAG=$(az acr repository show-tags \
               --name "${REGISTRY}" --repository "${REPO}" \
               --orderby time_desc --output tsv \
-              | grep -E '^[a-f0-9]+-[0-9]+$' \
-              | grep -vE '^(attack|size-|tc04|lat-)' | head -1)
+              | grep -E '^[a-f0-9]+-[0-9]+$' | head -1)
             DIGEST=$(az acr repository show \
               --name "${REGISTRY}" --image "${REPO}:${TAG}" \
               --query digest --output tsv)
@@ -441,12 +445,35 @@ jobs:
           done
 
           mkdir -p "${RESULTS_DIR}"
+
+          # The sweep is the most cache-sensitive experiment of the three: with
+          # the cache warm Kyverno stays flat at ~7 ms to 50 concurrent, and
+          # cold it reaches 8.4 s per request and starts rejecting. Those are
+          # opposite conclusions about headroom, so the artefact has to say
+          # which one it measured. It also records the Kyverno image and replica
+          # count, which this block omitted — the latency and size artefacts
+          # both carry them, and a table renderer that reports "kyverno unknown"
+          # for one experiment and not the others is a gap in the evidence
+          # chain, not a cosmetic one. Defects D13/D37.
+          CC_ARGS=$(kubectl get deployment kyverno-admission-controller -n kyverno \
+            -o jsonpath='{.spec.template.spec.containers[0].args}' 2>/dev/null || echo '')
+          CC_CACHE=$(printf '%s' "${CC_ARGS}" \
+            | grep -o -- '--imageVerifyCacheEnabled=[A-Za-z]*' | head -1 | cut -d= -f2)
+          CC_CACHE="${CC_CACHE:-default-for-build}"
+          echo "  image verification cache: enabled=${CC_CACHE}"
+
           jq -n \
             --arg cloud "${CLOUD}" \
             --arg image "${PROBE_IMAGE}" \
             --arg levels "${{ inputs.concurrency_levels }}" \
             --arg requests "${{ inputs.concurrency_requests }}" \
             --arg namespace "${NAMESPACE}" \
+            --arg cache_enabled "${CC_CACHE}" \
+            --arg args "${CC_ARGS}" \
+            --arg kyverno_image "$(kubectl get deployment kyverno-admission-controller \
+              -n kyverno -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || echo unknown)" \
+            --arg replicas "$(kubectl get deployment kyverno-admission-controller \
+              -n kyverno -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo unknown)" \
             --arg run_url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
             --arg generated "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --arg runner "$(nproc) vCPU, $(free -m | awk '/^Mem:/{print $2}') MB" \
@@ -454,6 +481,9 @@ jobs:
             '{cloud: $cloud, probe_image: $image, probe_namespace: $namespace,
               experiment: "admission cost under concurrent pod creation",
               concurrency_levels: $levels, requests_per_level: $requests,
+              kyverno_image: $kyverno_image, kyverno_ready_replicas: $replicas,
+              image_verify_cache_enabled: $cache_enabled,
+              admission_controller_args: $args,
               runner: $runner, admission: $admission,
               run_url: $run_url, generated: $generated}' \
             > "${RESULTS_DIR}/_environment.json"

@@ -1,20 +1,20 @@
 {
   "run": {
     "cloud": "aws",
-    "run_id": "31886676002",
+    "run_id": "31887855859",
     "run_attempt": "1",
     "repository": "JMTeixeira23/DIMEI-k8s-2026",
     "commit": "f5d638be57eeea35adc8f4128ad11bfc8b43b154",
-    "run_url": "https://github.com/JMTeixeira23/DIMEI-k8s-2026/actions/runs/31886676002",
-    "generated": "2026-08-15T13:17:26Z",
+    "run_url": "https://github.com/JMTeixeira23/DIMEI-k8s-2026/actions/runs/31887855859",
+    "generated": "2026-08-15T13:45:15Z",
     "kubectl_context": "arn:aws:eks:eu-west-1:812982728774:cluster/supply-chain-eks",
     "kyverno_image": "reg.kyverno.io/kyverno/kyverno:v1.18.2",
     "kyverno_ready_replicas": "3",
-    "webhook_failure_policies": "kyverno-svc.kyverno.svc=Fail kyverno-cleanup-controller.kyverno.svc=Fail kyverno-svc.kyverno.svc=Fail kyverno-svc.kyverno.svc=Fail validate-policy.kyverno.svc=Fail validate.kyverno.svc-ignore=Ignore kyverno-cleanup-controller.kyverno.svc=Ignore",
+    "webhook_failure_policies": "kyverno-svc.kyverno.svc=Fail kyverno-cleanup-controller.kyverno.svc=Fail kyverno-svc.kyverno.svc=Fail kyverno-svc.kyverno.svc=Fail validate-policy.kyverno.svc=Fail validate.kyverno.svc-fail=Fail kyverno-cleanup-controller.kyverno.svc=Ignore",
     "default_ns_exclude_label": "always",
     "admission": {
-      "configuration": "fail-open",
-      "policy_webhooks": "mutate.kyverno.svc-ignore=Ignore validate.kyverno.svc-ignore=Ignore",
+      "configuration": "fail-closed",
+      "policy_webhooks": "mutate.kyverno.svc-fail=Fail validate.kyverno.svc-fail=Fail",
       "clusterpolicy_count": 3,
       "other_kyverno_webhooks": "kyverno-cleanup-controller.kyverno.svc=Fail kyverno-cleanup-controller.kyverno.svc=Ignore kyverno-svc.kyverno.svc=Fail monitor-webhooks.kyverno.svc=Ignore mutate-policy.kyverno.svc=Fail validate-policy.kyverno.svc=Fail",
       "webhook_timeout_seconds": "10",
@@ -51,7 +51,7 @@
       "scenario": "A1",
       "title": "Unsigned image from an unapproved external registry (alpine:latest, docker.io)",
       "cloud": "aws",
-      "run_id": "31886676002",
+      "run_id": "31887855859",
       "requirements": [
         "SR-05"
       ],
@@ -62,14 +62,14 @@
       "observed_rule": "verify-image-signature/block-unapproved-registry",
       "image": "alpine:latest",
       "detail": "public image deployed directly; no build, no signature, outside the approved registry",
-      "message": "Error from server: admission webhook \"validate.kyverno.svc-ignore\" denied the request: resource Pod/supply-chain-demo/attack1 was blocked due to the following policies verify-image-signature: block-unapproved-registry: Only images from the approved registry (812982728774.dkr.ecr.eu-west-1.amazonaws.com) are permitted.",
-      "timestamp": "2026-08-15T13:15:29Z"
+      "message": "Error from server: admission webhook \"validate.kyverno.svc-fail\" denied the request: resource Pod/supply-chain-demo/attack1 was blocked due to the following policies verify-image-signature: block-unapproved-registry: Only images from the approved registry (812982728774.dkr.ecr.eu-west-1.amazonaws.com) are permitted.",
+      "timestamp": "2026-08-15T13:43:45Z"
     },
     {
       "scenario": "A2",
       "title": "Valid Cosign signature from the wrong identity (attacker-held local key)",
       "cloud": "aws",
-      "run_id": "31886676002",
+      "run_id": "31887855859",
       "requirements": [
         "SR-01"
       ],
@@ -80,14 +80,14 @@
       "observed_rule": "verify-image-signature/check-image-signature,verify-sbom-cyclonedx/check-sbom-cyclonedx,verify-slsa-provenance/check-slsa-provenance",
       "image": "812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world@sha256:d94bb5cdae3e0c16236a4cb0ec093f765eab685944d06202c5b57720eb6585d5",
       "detail": "signed with an attacker-generated key pair, not the pinned OIDC identity",
-      "message": "Error from server: admission webhook \"mutate.kyverno.svc-ignore\" denied the request: resource Pod/supply-chain-demo/attack2 was blocked due to the following policies verify-image-signature: check-image-signature: 'failed to verify image 812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world@sha256:d94bb5cdae3e0c16236a4cb0ec093f765eab685944d06202c5b57720eb6585d5: .attestors[0].entries[0].keyless: no matching signatures: empty key' verify-sbom-cyclonedx: check-sbom-cyclonedx: 'failed to verify image 812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world@sha256:d94bb5cdae3e0c16236a4cb0ec093f765eab685944d06202c5b57720eb6585d5: .attestors[0].entries[0].keyless: no matching signatures: empty key' verify-slsa-provenance: check-slsa-provenance: 'failed to verify image 812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world@sha256:d94bb5cdae3e0c16236a4cb0ec093f765eab685944d06202c5b57720eb6585d5: .attestors[0].entries[0].keyless: no matching signatures: empty key'",
-      "timestamp": "2026-08-15T13:15:49Z"
+      "message": "Error from server: admission webhook \"mutate.kyverno.svc-fail\" denied the request: resource Pod/supply-chain-demo/attack2 was blocked due to the following policies verify-image-signature: check-image-signature: |- failed to verify image 812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world@sha256:d94bb5cdae3e0c16236a4cb0ec093f765eab685944d06202c5b57720eb6585d5: .attestors[0].entries[0].keyless: no matching signatures: empty key empty key verify-sbom-cyclonedx: check-sbom-cyclonedx: |- failed to verify image 812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world@sha256:d94bb5cdae3e0c16236a4cb0ec093f765eab685944d06202c5b57720eb6585d5: .attestors[0].entries[0].keyless: no matching signatures: empty key empty key verify-slsa-provenance: check-slsa-provenance: |- failed to verify image 812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world@sha256:d94bb5cdae3e0c16236a4cb0ec093f765eab685944d06202c5b57720eb6585d5: .attestors[0].entries[0].keyless: no matching signatures: empty key empty key",
+      "timestamp": "2026-08-15T13:44:01Z"
     },
     {
       "scenario": "A3",
       "title": "Tag redirected to unsigned content after signing (pre-admission TOCTOU)",
       "cloud": "aws",
-      "run_id": "31886676002",
+      "run_id": "31887855859",
       "requirements": [
         "SR-02"
       ],
@@ -96,16 +96,16 @@
       "outcome": "PASS",
       "expected_rule": "verify-image-signature/check-image-signature",
       "observed_rule": "verify-image-signature/check-image-signature,verify-sbom-cyclonedx/check-sbom-cyclonedx,verify-slsa-provenance/check-slsa-provenance",
-      "image": "812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world:attack3-tagmove-31886676002",
-      "detail": "signed D1=sha256:10ab5658a836f0ed269d51e1b6b712f830f99ad12c9941fb8496e3b77d8c383f; deployed by tag, which now resolves to unsigned D2=sha256:6b28e0f284c324095db955c98f8898c2451dc31abd81dc0a70d2d4508aea2dbf",
-      "message": "Error from server: admission webhook \"mutate.kyverno.svc-ignore\" denied the request: resource Pod/supply-chain-demo/attack3 was blocked due to the following policies verify-image-signature: check-image-signature: 'failed to verify image 812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world:attack3-tagmove-31886676002: .attestors[0].entries[0].keyless: no signatures found' verify-sbom-cyclonedx: check-sbom-cyclonedx: 'failed to verify image 812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world:attack3-tagmove-31886676002: .attestors[0].entries[0].keyless: no signatures found' verify-slsa-provenance: check-slsa-provenance: 'failed to verify image 812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world:attack3-tagmove-31886676002: .attestors[0].entries[0].keyless: no signatures found'",
-      "timestamp": "2026-08-15T13:16:25Z"
+      "image": "812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world:attack3-tagmove-31887855859",
+      "detail": "signed D1=sha256:c4d2387a446053deee9a94265d6691179db5b5806507e03404434a4c9f22be6d; deployed by tag, which now resolves to unsigned D2=sha256:e68057165acb7ae6499fe0b8fa1cf42fa1bc13bc006805394f050945e0c03205",
+      "message": "Error from server: admission webhook \"mutate.kyverno.svc-fail\" denied the request: resource Pod/supply-chain-demo/attack3 was blocked due to the following policies verify-image-signature: check-image-signature: 'failed to verify image 812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world:attack3-tagmove-31887855859: .attestors[0].entries[0].keyless: no signatures found' verify-sbom-cyclonedx: check-sbom-cyclonedx: 'failed to verify image 812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world:attack3-tagmove-31887855859: .attestors[0].entries[0].keyless: no signatures found' verify-slsa-provenance: check-slsa-provenance: 'failed to verify image 812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world:attack3-tagmove-31887855859: .attestors[0].entries[0].keyless: no signatures found'",
+      "timestamp": "2026-08-15T13:44:31Z"
     },
     {
       "scenario": "A4",
       "title": "Signed, provenance attested, CycloneDX SBOM attestation omitted",
       "cloud": "aws",
-      "run_id": "31886676002",
+      "run_id": "31887855859",
       "requirements": [
         "SR-03"
       ],
@@ -116,14 +116,14 @@
       "observed_rule": "verify-sbom-cyclonedx/check-sbom-cyclonedx",
       "image": "812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world@sha256:7d417d5ed54a3cc16fad19c77057372c0c81b2200f603882feed475a1b4ae6a2",
       "detail": "signature and SLSA provenance present; CycloneDX SBOM attestation is the only missing control",
-      "message": "Error from server: admission webhook \"mutate.kyverno.svc-ignore\" denied the request: resource Pod/supply-chain-demo/attack4 was blocked due to the following policies verify-sbom-cyclonedx: check-sbom-cyclonedx: 'image attestations verification failed, verifiedCount: 0, requiredCount: 1, error: .attestations[0].attestors[0].entries[0].keyless: attestions not found for predicate type https://cyclonedx.org/bom'",
-      "timestamp": "2026-08-15T13:16:47Z"
+      "message": "Error from server: admission webhook \"mutate.kyverno.svc-fail\" denied the request: resource Pod/supply-chain-demo/attack4 was blocked due to the following policies verify-sbom-cyclonedx: check-sbom-cyclonedx: 'image attestations verification failed, verifiedCount: 0, requiredCount: 1, error: .attestations[0].attestors[0].entries[0].keyless: attestions not found for predicate type https://cyclonedx.org/bom'",
+      "timestamp": "2026-08-15T13:44:46Z"
     },
     {
       "scenario": "A5",
       "title": "Signed, SBOM attested, SLSA provenance attestation omitted",
       "cloud": "aws",
-      "run_id": "31886676002",
+      "run_id": "31887855859",
       "requirements": [
         "SR-04"
       ],
@@ -134,14 +134,14 @@
       "observed_rule": "verify-slsa-provenance/check-slsa-provenance",
       "image": "812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world@sha256:4275e01e5e5ccc0a69c2a7f442eab51226d7088c2d024609eb66e576ae4959e9",
       "detail": "signature and CycloneDX SBOM present; SLSA provenance attestation is the only missing control",
-      "message": "Error from server: admission webhook \"mutate.kyverno.svc-ignore\" denied the request: resource Pod/supply-chain-demo/attack5 was blocked due to the following policies verify-slsa-provenance: check-slsa-provenance: 'image attestations verification failed, verifiedCount: 0, requiredCount: 1, error: .attestations[0].attestors[0].entries[0].keyless: attestions not found for predicate type https://slsa.dev/provenance/v1'",
-      "timestamp": "2026-08-15T13:17:10Z"
+      "message": "Error from server: admission webhook \"mutate.kyverno.svc-fail\" denied the request: resource Pod/supply-chain-demo/attack5 was blocked due to the following policies verify-slsa-provenance: check-slsa-provenance: 'image attestations verification failed, verifiedCount: 0, requiredCount: 1, error: .attestations[0].attestors[0].entries[0].keyless: attestions not found for predicate type https://slsa.dev/provenance/v1'",
+      "timestamp": "2026-08-15T13:45:02Z"
     },
     {
       "scenario": "A6",
       "title": "Unsigned image pushed to the approved registry (insider build)",
       "cloud": "aws",
-      "run_id": "31886676002",
+      "run_id": "31887855859",
       "requirements": [
         "SR-01",
         "SR-06"
@@ -153,14 +153,14 @@
       "observed_rule": "verify-image-signature/check-image-signature,verify-sbom-cyclonedx/check-sbom-cyclonedx,verify-slsa-provenance/check-slsa-provenance",
       "image": "812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world@sha256:eb789eeb2c0e8a50cec85fbf8c8007ff2c8982b46cf2ff89891e53ae15bcae15",
       "detail": "pushed to the approved registry; no Cosign signature and no attestations",
-      "message": "Error from server: admission webhook \"mutate.kyverno.svc-ignore\" denied the request: resource Pod/supply-chain-demo/attack6 was blocked due to the following policies verify-image-signature: check-image-signature: 'failed to verify image 812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world@sha256:eb789eeb2c0e8a50cec85fbf8c8007ff2c8982b46cf2ff89891e53ae15bcae15: .attestors[0].entries[0].keyless: no signatures found' verify-sbom-cyclonedx: check-sbom-cyclonedx: 'failed to verify image 812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world@sha256:eb789eeb2c0e8a50cec85fbf8c8007ff2c8982b46cf2ff89891e53ae15bcae15: .attestors[0].entries[0].keyless: no signatures found' verify-slsa-provenance: check-slsa-provenance: 'failed to verify image 812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world@sha256:eb789eeb2c0e8a50cec85fbf8c8007ff2c8982b46cf2ff89891e53ae15bcae15: .attestors[0].entries[0].keyless: no signatures found'",
-      "timestamp": "2026-08-15T13:17:21Z"
+      "message": "Error from server: admission webhook \"mutate.kyverno.svc-fail\" denied the request: resource Pod/supply-chain-demo/attack6 was blocked due to the following policies verify-image-signature: check-image-signature: 'failed to verify image 812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world@sha256:eb789eeb2c0e8a50cec85fbf8c8007ff2c8982b46cf2ff89891e53ae15bcae15: .attestors[0].entries[0].keyless: no signatures found' verify-sbom-cyclonedx: check-sbom-cyclonedx: 'failed to verify image 812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world@sha256:eb789eeb2c0e8a50cec85fbf8c8007ff2c8982b46cf2ff89891e53ae15bcae15: .attestors[0].entries[0].keyless: no signatures found' verify-slsa-provenance: check-slsa-provenance: 'failed to verify image 812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world@sha256:eb789eeb2c0e8a50cec85fbf8c8007ff2c8982b46cf2ff89891e53ae15bcae15: .attestors[0].entries[0].keyless: no signatures found'",
+      "timestamp": "2026-08-15T13:45:09Z"
     },
     {
       "scenario": "TC-NS",
       "title": "Namespace scoping: the A6 unsigned image in the default namespace",
       "cloud": "aws",
-      "run_id": "31886676002",
+      "run_id": "31887855859",
       "requirements": [
         "SR-07"
       ],
@@ -172,7 +172,7 @@
       "image": "812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world@sha256:eb789eeb2c0e8a50cec85fbf8c8007ff2c8982b46cf2ff89891e53ae15bcae15",
       "detail": "same artefact denied by A6 in supply-chain-demo; pod phase in default: Pending",
       "message": "pod/tc-ns-probe created",
-      "timestamp": "2026-08-15T13:17:26Z"
+      "timestamp": "2026-08-15T13:45:14Z"
     }
   ]
 }

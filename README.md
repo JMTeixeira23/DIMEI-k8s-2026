@@ -24,8 +24,10 @@ Three Kyverno policies written once enforce identical security requirements on b
 ```
 .github/workflows/
   supply-chain-pipeline.yml         — CD pipeline (auto on docker/ push, matrix: aws + azure)
-  measure-admission-latency.yml     — Latency measurement (manual, thesis data collection)
-  attack-simulations.yml            — Attack scenarios (manual, thesis evidence)
+  measure-admission-latency.yml     — Latency, image-size and concurrency measurement (manual)
+  attack-simulations.yml            — Attack scenarios A1–A6 + TC-NS (manual, thesis evidence)
+  evasion-tests.yml                 — Evasion suite E1–E4: attacks aimed at the policies' own
+                                      assumptions, where some are expected to SUCCEED
 
 docker/
   hello-world/                      — The workload under test (Alpine 3.19 base)
@@ -40,24 +42,40 @@ policies/
     azure.env                       — REGISTRY=supplychainthesis.azurecr.io
 
 scripts/
-  gen_slsa_provenance.py            — Generates SLSA provenance predicate (used by both build workflows)
+  gen_slsa_provenance.py            — Generates the SLSA provenance predicate signed inside the build
+  slsa-l2-evidence.sh               — Records the SLSA Build L2 evidence, keeping what was observed
+                                      separate from the level claimed from it
 
-  admission-lib.sh                  — Admission probe + evidence recording, shared by both suites below
+  admission-lib.sh                  — Admission probe + evidence recording, shared by the suites below
   admission-summary.sh              — Builds an evidence artefact (JSON + CSV) from the recorded results
   attack-lib.sh                     — Scenario manifest for attack-simulations.yml
   attack-summary.sh                 — Attack artefact entry point (attack-results-<cloud>.json)
   testcase-lib.sh                   — TC-01…TC-05 manifest for supply-chain-pipeline.yml
   testcase-summary.sh               — Test-case artefact entry point (testcase-results-<cloud>.json)
-  attack_table.py                   — Renders either results table from its artefact (run locally)
+  evasion-lib.sh                    — E1–E4 manifest; which cases exist depends on the dispatched ref
+  evasion-summary.sh                — Evasion artefact entry point (evasion-results-<cloud>.json)
 
-  run-latency-matrix.sh             — Runs baseline/audit/enforce in randomised, seeded order
+  run-latency-matrix.sh             — Runs baseline/audit/enforce in a seeded, recorded order
   measure-admission.sh              — Measures one condition (used by measure-admission-latency.yml)
+  measure-concurrency.sh            — Concurrency sweep at several parallelism levels
   kyverno_metrics.py                — Scrapes and deltas Kyverno's Prometheus histograms
   latency_report.py                 — Builds the latency artefact from a measurement run
   latency_analysis.py               — Mann-Whitney U, effect size and percentiles from requests.csv
   latency_charts.py                 — ECDF + violin figures for both experiments (run locally)
+
   set-failure-policy.sh             — Switches the cluster fail-open/fail-closed and verifies it took
+  set-verify-cache.sh               — Switches Kyverno's image verification cache on/off and verifies
+                                      it took; the cache changes in-webhook cost by ~150x, so it is a
+                                      recorded condition of every performance run, not a default
+  policy-ready.sh                   — One reader for ClusterPolicy readiness across Kyverno versions
   webhook-state.sh                  — Prints the admission configuration an evidence run executed under
+  version-audit.sh                  — Pinned versions vs upstream, and why each pin is where it is
+  diagnose-image-verification.sh    — Read-only: why did Kyverno deny an image Cosign verified?
+
+  attack_table.py                   — Renders the security tables from their artefacts
+  latency_table.py                  — Renders the performance tables from their artefacts
+  render-all-tables.sh              — Regenerates every table into results/TABLES-<cloud>.{tex,md}
+  results-manifest.py               — Rebuilds results/MANIFEST.md: every artefact, its run, its stack
   local/
     install-tools.sh                — Installs cosign, syft, crane locally
     registry-login.sh               — Docker login for local use (dispatches on $CLOUD)
@@ -74,10 +92,38 @@ infrastructure/
   aws/                              — EKS + ECR + OIDC + IAM
   azure/                            — AKS + ACR + Entra Workload Identity
 
+results/
+  MANIFEST.md                       — Generated: every artefact, its run, and the stack it ran on
+  TABLES-aws.tex / .md              — Generated: every dissertation table, with provenance
+  <experiment>/<cloud>-<run>[-arm]/ — One directory per run; superseded runs are kept, not deleted
+
 bootstrap-aws.sh                    — Post-apply setup for AWS (Kyverno + policies + namespaces)
 bootstrap-azure.sh                  — Post-apply setup for Azure
+versions.env                        — Single source of truth for every third-party version, and the
+                                      separate record of which versions results/ was collected on
 Makefile                            — Local dev shortcuts
 ```
+
+### What was added for the evaluation, in one line each
+
+- **Evasion suite (E1–E4)** — attacks aimed at the *policies' own assumptions*
+  rather than at obviously bad images. Two of the four are expected to succeed;
+  the artefact carries a `control` field so "4/4 as predicted" can never be
+  misread as "4/4 blocked".
+- **SLSA Build L2** — provenance generated and signed by the hosted build
+  platform, alongside the L1 provenance generated inside the build. Additive and
+  revertible: set the repository variable `SLSA_L2=false` and nothing else
+  changes. The pipeline *produces* L2; admission still *enforces* on L1.
+- **Verification cache as a condition** — Kyverno v1.18.2 caches image
+  verification for one hour. It changes in-webhook cost by roughly 150×, so
+  every performance experiment is run twice, cold and warm, and each artefact
+  records which it was.
+- **Fail-open / fail-closed** — the security suites run under both admission
+  failure configurations; the webhook name in each denial proves which was
+  active, independently of what the switch reported.
+- **Everything is rendered, nothing is typed** — every table in the dissertation
+  comes from `render-all-tables.sh` reading committed artefacts, and each table
+  carries the run id, URL, Kyverno version and cache state it came from.
 
 ---
 

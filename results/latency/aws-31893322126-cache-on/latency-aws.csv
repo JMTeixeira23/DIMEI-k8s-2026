@@ -1,0 +1,4 @@
+cloud,condition,n,min_ms,p50_ms,p95_ms,p99_ms,max_ms,mean_ms,stdev_ms,rejected,admission_reviews,in_webhook_ms_per_request
+aws,baseline,30,2548,2624,2717,2743,2743,2628.3,43.28,0,,
+aws,audit,30,2581,2654,2783,3047,3047,2668.37,84.62,0,60.0,6.782
+aws,enforce,30,2587,2655,2748,2759,2759,2661.57,40.22,0,60.0,7.044
