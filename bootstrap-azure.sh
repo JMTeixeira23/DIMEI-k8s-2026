@@ -93,13 +93,53 @@ helm upgrade --install kyverno kyverno/kyverno \
   --set reportsController.replicas=1 \
   --set cleanupController.replicas=1 \
   --set webhooksCleanup.enabled=false \
-  --set "admissionController.serviceAccount.annotations.azure\\.workload\\.identity/client-id=${KYVERNO_CLIENT_ID}" \
+  --set "admissionController.rbac.serviceAccount.annotations.azure\\.workload\\.identity/client-id=${KYVERNO_CLIENT_ID}" \
   --set-string "admissionController.podLabels.azure\\.workload\\.identity/use=true" \
   --timeout 5m \
   --no-hooks \
   --wait
 
 echo "  ✅ Kyverno installed"
+
+# ── Workload identity: the same defect as AWS, and never masked here ─────────
+#
+# Defect D30. The client-id annotation used to be set on
+# `admissionController.serviceAccount.annotations`, a value this chart does not
+# define — the template reads `admissionController.rbac.serviceAccount.annotations`.
+# Helm ignored it in silence on chart 3.1.4 and 3.8.2 alike (verified by
+# rendering both). The podLabels line beside it was always correct, which is
+# what made the mistake so easy to miss: half the wiring worked.
+#
+# Unlike bootstrap-aws.sh this script never had a `kubectl annotate` fallback,
+# so Kyverno on AKS has never held a workload identity. No Azure result has been
+# collected in this cycle, so nothing published is affected — but the first ACR
+# image verification would have failed exactly as AWS did on 2026-08-15.
+echo ""
+echo "▶ Verifying Kyverno received the workload identity..."
+if kubectl get sa kyverno-admission-controller -n "${KYVERNO_NS}" \
+     -o jsonpath='{.metadata.annotations.azure\.workload\.identity/client-id}' \
+     2>/dev/null | grep -q .; then
+  echo "  ✅ client-id annotation present on the service account"
+else
+  echo ""
+  echo "  ❌ The Kyverno service account has no azure.workload.identity/client-id."
+  echo "     Every ACR image verification will hang and be cancelled at the 10 s"
+  echo "     webhook deadline. This is defect D30 — do not run the experiments"
+  echo "     against this cluster."
+  echo "       kubectl get sa kyverno-admission-controller -n ${KYVERNO_NS} -o yaml"
+  exit 5
+fi
+
+# The projected token is mounted at pod admission, so pods that started before
+# the annotation existed keep running without it.
+if ! kubectl get pods -n "${KYVERNO_NS}" \
+       -l app.kubernetes.io/component=admission-controller \
+       -o jsonpath='{range .items[*]}{.spec.containers[0].env[?(@.name=="AZURE_FEDERATED_TOKEN_FILE")].name}{"\n"}{end}' \
+       2>/dev/null | grep -q AZURE_FEDERATED_TOKEN_FILE; then
+  echo "  ⚠️  Pods are running without the federated token. Restarting..."
+  kubectl rollout restart deployment/kyverno-admission-controller -n "${KYVERNO_NS}"
+  kubectl rollout status  deployment/kyverno-admission-controller -n "${KYVERNO_NS}" --timeout=5m
+fi
 
 # ── Remove the policy webhook ────────────────────────────────────────────────
 # --forceFailurePolicyIgnore is set at install time via

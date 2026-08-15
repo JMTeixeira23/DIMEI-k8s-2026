@@ -123,7 +123,7 @@ helm upgrade --install kyverno kyverno/kyverno \
   --set backgroundController.replicas=1 \
   --set reportsController.replicas=1 \
   --set cleanupController.replicas=1 \
-  --set "admissionController.serviceAccount.annotations.eks\\.amazonaws\\.com/role-arn=${KYVERNO_ROLE_ARN}" \
+  --set "admissionController.rbac.serviceAccount.annotations.eks\\.amazonaws\\.com/role-arn=${KYVERNO_ROLE_ARN}" \
   --set webhooksCleanup.enabled=false \
   --timeout 5m \
   --no-hooks \
@@ -131,12 +131,74 @@ helm upgrade --install kyverno kyverno/kyverno \
 
 echo "  ✅ Kyverno installed"
 
-# Explicitly annotate the service account — the Helm --set flag is unreliable.
-# IRSA token injection requires this annotation to be present before pod start.
+# ── IRSA: the annotation must exist BEFORE the pods start ────────────────────
+#
+# Defect D30. The --set above used to target
+# `admissionController.serviceAccount.annotations`, which is not a value this
+# chart has ever defined — the template reads
+# `.Values.admissionController.rbac.serviceAccount.annotations`. Helm ignores
+# unknown values in silence, so the annotation was never rendered, on chart
+# 3.1.4 or 3.8.2. Verified by rendering both charts against both paths.
+#
+# The kubectl annotate below was added to compensate, with a comment calling the
+# --set "unreliable". It was not unreliable, it was wrong — and annotating the
+# ServiceAccount cannot fix pods that are already running, because the EKS pod
+# identity webhook injects the projected token at pod ADMISSION. On a re-run
+# against an existing cluster the annotation survived from the previous run and
+# everything worked; on a FRESH cluster the admission controller came up with no
+# AWS credentials at all. That is why this defect stayed invisible until the
+# 2026-08-15 destroy/apply, and why it then broke every image verification:
+# Kyverno's ECR credential helper had nothing to authenticate with, the request
+# to the registry hung, and the 10 s webhook deadline cancelled it.
+#
+# The annotate stays as a belt-and-braces for clusters installed by an older
+# copy of this script, and is now followed by an assertion that the running pods
+# actually received the credentials.
 echo ""
 echo "▶ Annotating Kyverno service account for IRSA..."
-kubectl annotate serviceaccount kyverno-admission-controller   -n "${KYVERNO_NS}"   "eks.amazonaws.com/role-arn=${KYVERNO_ROLE_ARN}"   --overwrite
+kubectl annotate serviceaccount kyverno-admission-controller \
+  -n "${KYVERNO_NS}" \
+  "eks.amazonaws.com/role-arn=${KYVERNO_ROLE_ARN}" --overwrite
 echo "  ✅ IRSA annotation set"
+
+# Assert the credentials reached the containers. AWS_WEB_IDENTITY_TOKEN_FILE is
+# injected by the pod identity webhook only when the ServiceAccount carried the
+# annotation at pod admission time, so its presence is proof that this worked —
+# and its absence is the exact condition that produced defect D30.
+echo ""
+echo "▶ Verifying Kyverno received the IRSA credentials..."
+irsa_ok() {
+  kubectl get pods -n "${KYVERNO_NS}" \
+    -l app.kubernetes.io/component=admission-controller \
+    -o jsonpath='{range .items[*]}{.spec.containers[0].env[?(@.name=="AWS_WEB_IDENTITY_TOKEN_FILE")].name}{"\n"}{end}' \
+    2>/dev/null | grep -q AWS_WEB_IDENTITY_TOKEN_FILE
+}
+
+if irsa_ok; then
+  echo "  ✅ AWS_WEB_IDENTITY_TOKEN_FILE present — Kyverno can authenticate to ECR"
+else
+  echo "  ⚠️  Pods are running WITHOUT IRSA credentials. Restarting them so the"
+  echo "     pod identity webhook can inject the token..."
+  kubectl rollout restart deployment/kyverno-admission-controller -n "${KYVERNO_NS}"
+  kubectl rollout status  deployment/kyverno-admission-controller -n "${KYVERNO_NS}" --timeout=5m
+
+  if irsa_ok; then
+    echo "  ✅ AWS_WEB_IDENTITY_TOKEN_FILE present after restart"
+  else
+    echo ""
+    echo "  ❌ Kyverno still has no IRSA credentials after a restart."
+    echo "     Every image verification will hang and be cancelled at the 10 s"
+    echo "     webhook deadline, and every policy will deny with 'context canceled'."
+    echo "     This is defect D30. Do not run the experiments against this cluster."
+    echo ""
+    echo "     Check, in order:"
+    echo "       kubectl get sa kyverno-admission-controller -n ${KYVERNO_NS} -o yaml"
+    echo "       aws iam get-role --role-name \$(basename '${KYVERNO_ROLE_ARN}')"
+    echo "       # the role's trust policy must name THIS cluster's OIDC provider,"
+    echo "       # which changes on every terraform destroy/apply"
+    exit 5
+  fi
+fi
 
 # ── Remove the policy webhook ────────────────────────────────────────────────
 # --forceFailurePolicyIgnore is set at install time via
