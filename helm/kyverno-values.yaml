@@ -7,6 +7,39 @@
 #
 # To update Kyverno config, edit this file and re-run the relevant bootstrap.
 
+# ── Metrics label dimensions: the measurement depends on them (defect D36) ────
+#
+# Chart 3.8.2 introduced a `metricsExposure` block that chart 3.1.4 did not have,
+# and its DEFAULT strips the namespace label from the two families this
+# evaluation measures:
+#
+#   kyverno_admission_review_duration_seconds  disabledLabelDimensions: [resource_namespace]
+#   kyverno_policy_execution_duration_seconds  disabledLabelDimensions: [resource_namespace, resource_request_operation]
+#
+# `measure-admission.sh` selects series with `--filter resource_namespace=
+# supply-chain-demo`. With the label gone, that filter matches nothing, and run
+# 31890464496 recorded `in_webhook_cost: null` for every condition — the primary
+# metric of §0.0.1, the "measured inside Kyverno" figure, silently absent.
+#
+# ⚠️ THE OBVIOUS FIX IS THE WRONG ONE. Dropping the filter would make the
+# numbers reappear, and they would be the aggregate of ALL admission traffic in
+# the cluster — including namespaces no policy matches. That is precisely defect
+# D1, the namespace error that invalidated the entire original Phase 4. The
+# label is not decoration; it is what scopes the measurement to the pods the
+# policies actually evaluate.
+#
+# So the dimensions are re-enabled rather than the filter removed. An empty
+# disabledLabelDimensions restores the labels the 3.1.4 results were collected
+# with, which is also what makes the two comparable.
+metricsConfig:
+  metricsExposure:
+    kyverno_admission_review_duration_seconds:
+      disabledLabelDimensions: []
+    kyverno_policy_execution_duration_seconds:
+      disabledLabelDimensions: []
+    kyverno_admission_requests_total:
+      disabledLabelDimensions: []
+
 admissionController:
   replicas: 3
 

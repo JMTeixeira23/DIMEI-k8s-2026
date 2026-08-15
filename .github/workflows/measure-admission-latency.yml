@@ -195,6 +195,28 @@ jobs:
       - name: Resolve the signed image by digest
         run: |
           set -euo pipefail
+          # ── Selecting the probe image (defect D35) ───────────────────────
+          #
+          # The probe must be a COMPLIANT image — signed, SBOM-attested and
+          # provenance-attested by the release pipeline — because the enforce
+          # condition measures the cost of ADMITTING one. If a non-compliant
+          # image is chosen, enforce rejects every request, `request_cost` is
+          # null, and the enforce-vs-baseline comparison cannot be computed.
+          #
+          # This used to be a blocklist: newest tag that is not
+          # ^(attack|size-|tc04|lat-). Blocklists rot. The evasion suite was
+          # added after it was written and pushes `evasion1-…`, `evasion2-…`,
+          # `evasion3-…`, `evasion4-…` tags, none of which were excluded — so
+          # run 31890464496, dispatched minutes after the evasion suite, picked
+          # up E4's image: an image signed on a branch, which the pinned
+          # identity is designed to REJECT. All 30 enforce probes were denied
+          # and that run is void.
+          #
+          # It is an allowlist now, matching the Azure side, which already did
+          # this correctly. The pipeline tags images `${github.sha}-${run_id}`,
+          # so ^[a-f0-9]+-[0-9]+$ selects release images and nothing else. Every
+          # experiment tag (attack-, size-, tc04-, lat-, evasion*-) fails to
+          # match by construction, including experiments not yet written.
           if [ "${CLOUD}" = "aws" ]; then
             REGISTRY="${{ steps.ecr-login.outputs.registry }}"
             REPO="${{ secrets.ECR_REPO_NAME }}"
@@ -205,9 +227,7 @@ jobs:
               | jq -r '
                   .imageDetails
                   | map(select(.imageTags != null))
-                  | map(select(.imageTags[] | test("^sha256") | not))
-                  | map(select(.imageTags[] | test("-")))
-                  | map(select(.imageTags[] | test("^(attack|size-|tc04|lat-)") | not))
+                  | map(select(.imageTags[] | test("^[a-f0-9]+-[0-9]+$")))
                   | sort_by(.imagePushedAt) | last | .imageTags[0]')
             DIGEST=$(aws ecr describe-images \
               --repository-name "${REPO}" \
@@ -278,8 +298,14 @@ jobs:
           CACHE_ENABLED="unknown"
           if printf '%s' "${ARGS}" | grep -q "imageVerifyCache"; then
             CACHE_FLAG="present-in-args"
-            CACHE_ENABLED=$(printf '%s' "${ARGS}" | tr ' ' '\n' \
-              | sed -n 's/^--imageVerifyCacheEnabled=//p' | head -1)
+            # grep -o, not tr+sed: ARGS is a JSON ARRAY string
+            # (["--a=1","--b=2"]), so the tokens carry quotes, commas and
+            # brackets and never start at column 0. The tr+sed form returned
+            # empty and recorded `unknown` on run 31890464496 even though the
+            # flag was plainly there. grep -o is indifferent to the framing.
+            CACHE_ENABLED=$(printf '%s' "${ARGS}" \
+              | grep -o -- '--imageVerifyCacheEnabled=[A-Za-z]*' \
+              | head -1 | cut -d= -f2)
             CACHE_ENABLED="${CACHE_ENABLED:-unknown}"
           elif kubectl exec -n kyverno deploy/kyverno-admission-controller -- \
                  /kyverno --help 2>&1 | grep -qi "imageVerifyCache"; then
