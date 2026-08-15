@@ -206,15 +206,17 @@ jobs:
           echo "  Attack Simulations [${CLOUD}] — Preflight"
           echo "════════════════════════════════════════════════════"
 
+          # Defect D33: .status.ready is nil-ed and omitted by Kyverno v1.18.2,
+          # so reading it directly reports every policy as not ready.
+          source scripts/policy-ready.sh
+
           FAIL=0
           POLICIES='[]'
           for POLICY in verify-image-signature verify-sbom-cyclonedx verify-slsa-provenance; do
             ACTION=$(kubectl get clusterpolicy "${POLICY}" \
               -o jsonpath='{.spec.validationFailureAction}' 2>/dev/null || true)
-            READY=$(kubectl get clusterpolicy "${POLICY}" \
-              -o jsonpath='{.status.ready}' 2>/dev/null || true)
+            READY=$(policy_ready "${POLICY}")
             ACTION="${ACTION:-MISSING}"
-            READY="${READY:-false}"
 
             if [ "${ACTION}" != "Enforce" ] || [ "${READY}" != "true" ]; then
               echo "❌ ${POLICY}: action=${ACTION} ready=${READY}"

@@ -36,6 +36,10 @@ RANDOM_SEED="${RANDOM_SEED:-${GITHUB_RUN_ID:-1}}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 POLICIES=(verify-image-signature verify-sbom-cyclonedx verify-slsa-provenance)
 
+# One reader of policy readiness, shared with the three workflows. Defect D33.
+# shellcheck source=policy-ready.sh
+source "${HERE}/policy-ready.sh"
+
 mkdir -p "${RESULTS_DIR}"
 export RESULTS_DIR NAMESPACE WARMUP
 
@@ -72,8 +76,8 @@ wait_until_ready() {  # <expected validationFailureAction>
       local action ready
       action=$(kubectl get clusterpolicy "$p" \
         -o jsonpath='{.spec.validationFailureAction}' 2>/dev/null || true)
-      ready=$(kubectl get clusterpolicy "$p" \
-        -o jsonpath='{.status.ready}' 2>/dev/null || true)
+      # Defect D33 — not `.status.ready`, which v1.18.2 omits.
+      ready=$(policy_ready "$p")
       if [ "${action}" != "${want}" ] || [ "${ready}" != "true" ]; then
         ok=0
       fi

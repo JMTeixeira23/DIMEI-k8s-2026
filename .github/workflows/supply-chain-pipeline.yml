@@ -479,6 +479,13 @@ jobs:
           mkdir -p "${RESULTS_DIR}"
           POLICIES="verify-image-signature verify-sbom-cyclonedx verify-slsa-provenance"
 
+          # Readiness is read through scripts/policy-ready.sh, which checks the
+          # Ready *condition* and falls back to the deprecated .status.ready
+          # boolean. Reading that boolean directly is defect D33: Kyverno
+          # v1.18.2 nils it in SetReady() and omits it, so every policy reported
+          # ready=unknown and this preflight refused a healthy cluster.
+          source scripts/policy-ready.sh
+
           # A ClusterPolicy is not ready the instant it is applied — Kyverno has
           # to register its webhooks first. Waiting here rather than asserting
           # immediately is the difference between a flaky suite and one whose
@@ -486,8 +493,7 @@ jobs:
           for _ in $(seq 1 45); do
             OK=1
             for P in ${POLICIES}; do
-              [ "$(kubectl get clusterpolicy "$P" \
-                    -o jsonpath='{.status.ready}' 2>/dev/null || true)" = "true" ] || OK=0
+              [ "$(policy_ready "$P")" = "true" ] || OK=0
             done
             [ "${OK}" = "1" ] && break
             sleep 2
@@ -498,13 +504,16 @@ jobs:
           for P in ${POLICIES}; do
             ACTION=$(kubectl get clusterpolicy "$P" \
               -o jsonpath='{.spec.validationFailureAction}' 2>/dev/null || true)
-            READY=$(kubectl get clusterpolicy "$P" \
-              -o jsonpath='{.status.ready}' 2>/dev/null || true)
-            echo "  ${P}: ${ACTION:-MISSING} ready=${READY:-unknown}"
-            [ "${ACTION:-MISSING}" = "Enforce" ] && [ "${READY:-}" = "true" ] || FAIL=1
+            READY=$(policy_ready "$P")
+            echo "  ${P}: ${ACTION:-MISSING} ready=${READY}"
+            [ "${READY}" = "true" ] || {
+              MSG=$(policy_ready_reason "$P")
+              [ -n "${MSG}" ] && echo "      reason: ${MSG}"
+            }
+            [ "${ACTION:-MISSING}" = "Enforce" ] && [ "${READY}" = "true" ] || FAIL=1
             POLICY_STATE=$(jq -n \
               --argjson acc "${POLICY_STATE}" --arg p "$P" \
-              --arg a "${ACTION:-MISSING}" --arg r "${READY:-unknown}" \
+              --arg a "${ACTION:-MISSING}" --arg r "${READY}" \
               '$acc + {($p): {validationFailureAction: $a, ready: $r}}')
           done
 
