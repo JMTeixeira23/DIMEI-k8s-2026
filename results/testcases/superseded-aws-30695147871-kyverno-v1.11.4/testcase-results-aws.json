@@ -1,26 +1,16 @@
 {
   "run": {
     "cloud": "aws",
-    "run_id": "31885975456",
+    "run_id": "30695147871",
     "run_attempt": "1",
     "repository": "JMTeixeira23/DIMEI-k8s-2026",
-    "commit": "0a4a0f0ecbb279898a24bb6ccfee09fa0cbca4a1",
-    "run_url": "https://github.com/JMTeixeira23/DIMEI-k8s-2026/actions/runs/31885975456",
-    "generated": "2026-08-15T13:01:38Z",
+    "commit": "f97e0f2c1b565a13cb0b04fb14c257447d3f408b",
+    "run_url": "https://github.com/JMTeixeira23/DIMEI-k8s-2026/actions/runs/30695147871",
+    "generated": "2026-08-01T10:11:24Z",
     "kubectl_context": "arn:aws:eks:eu-west-1:812982728774:cluster/supply-chain-eks",
-    "kyverno_image": "reg.kyverno.io/kyverno/kyverno:v1.18.2",
+    "kyverno_image": "ghcr.io/kyverno/kyverno:v1.11.4",
     "kyverno_ready_replicas": "3",
     "default_namespace_exclude_label": "always",
-    "admission": {
-      "configuration": "fail-open",
-      "policy_webhooks": "mutate.kyverno.svc-ignore=Ignore validate.kyverno.svc-ignore=Ignore",
-      "clusterpolicy_count": 3,
-      "other_kyverno_webhooks": "kyverno-cleanup-controller.kyverno.svc=Fail kyverno-cleanup-controller.kyverno.svc=Ignore kyverno-svc.kyverno.svc=Fail monitor-webhooks.kyverno.svc=Ignore mutate-policy.kyverno.svc=Fail validate-policy.kyverno.svc=Fail",
-      "webhook_timeout_seconds": "10",
-      "kyverno_ready_replicas": "3",
-      "kyverno_desired_replicas": "3",
-      "pod_disruption_budgets": "kyverno-admission-controller(minAvailable=2,allowed=1)"
-    },
     "policies": {
       "verify-image-signature": {
         "validationFailureAction": "Enforce",
@@ -47,7 +37,7 @@
       "scenario": "TC-01",
       "title": "Pipeline-built image: signed, SBOM-attested and provenance-attested, deployed by digest",
       "cloud": "aws",
-      "run_id": "31885975456",
+      "run_id": "30695147871",
       "requirements": [
         "SR-01",
         "SR-03",
@@ -58,16 +48,16 @@
       "outcome": "PASS",
       "expected_rule": "none (fully compliant)",
       "observed_rule": "",
-      "image": "812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world@sha256:bdf6748294c852c6e9c8bdbacfd58284daa3aa94d1f2500de24ce2a2c8043481",
-      "detail": "signed, SBOM-attested and provenance-attested by this run; pod phase Succeeded",
+      "image": "812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world@sha256:4581cb15e39e9884f215d7681ad629006059f7becff2046c7f97cbe0a912cbe7",
+      "detail": "signed, SBOM-attested and provenance-attested by this run; pod phase Pending",
       "message": "pod/tc-01 created",
-      "timestamp": "2026-08-15T13:01:09Z"
+      "timestamp": "2026-08-01T10:11:02Z"
     },
     {
       "scenario": "TC-02",
       "title": "Public image from an unapproved registry (nginx:latest, docker.io)",
       "cloud": "aws",
-      "run_id": "31885975456",
+      "run_id": "30695147871",
       "requirements": [
         "SR-05"
       ],
@@ -79,13 +69,13 @@
       "image": "nginx:latest",
       "detail": "public image, unapproved registry",
       "message": "Error from server: admission webhook \"validate.kyverno.svc-ignore\" denied the request: resource Pod/supply-chain-demo/tc-02 was blocked due to the following policies verify-image-signature: block-unapproved-registry: Only images from the approved registry (812982728774.dkr.ecr.eu-west-1.amazonaws.com) are permitted.",
-      "timestamp": "2026-08-15T13:01:13Z"
+      "timestamp": "2026-08-01T10:11:05Z"
     },
     {
       "scenario": "TC-03",
       "title": "Public image from an unapproved registry (alpine:latest, docker.io)",
       "cloud": "aws",
-      "run_id": "31885975456",
+      "run_id": "30695147871",
       "requirements": [
         "SR-05"
       ],
@@ -97,13 +87,13 @@
       "image": "alpine:latest",
       "detail": "public image, unapproved registry",
       "message": "Error from server: admission webhook \"validate.kyverno.svc-ignore\" denied the request: resource Pod/supply-chain-demo/tc-03 was blocked due to the following policies verify-image-signature: block-unapproved-registry: Only images from the approved registry (812982728774.dkr.ecr.eu-west-1.amazonaws.com) are permitted.",
-      "timestamp": "2026-08-15T13:01:17Z"
+      "timestamp": "2026-08-01T10:11:09Z"
     },
     {
       "scenario": "TC-04",
       "title": "Unsigned image pushed to the approved registry",
       "cloud": "aws",
-      "run_id": "31885975456",
+      "run_id": "30695147871",
       "requirements": [
         "SR-01",
         "SR-06"
@@ -113,16 +103,16 @@
       "outcome": "PASS",
       "expected_rule": "verify-image-signature/check-image-signature",
       "observed_rule": "verify-image-signature/check-image-signature,verify-sbom-cyclonedx/check-sbom-cyclonedx,verify-slsa-provenance/check-slsa-provenance",
-      "image": "812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world@sha256:82b0531509c36cf375793ce911d7b969deaa6032dae0454c3c2529879c11ac6f",
+      "image": "812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world@sha256:5d316da4039edf46bbddb586fc38dba29a26a9fa41138c55681f1ad99e17cbf9",
       "detail": "pushed to the approved registry without signing",
-      "message": "Error from server: admission webhook \"mutate.kyverno.svc-ignore\" denied the request: resource Pod/supply-chain-demo/tc-04 was blocked due to the following policies verify-image-signature: check-image-signature: 'failed to verify image 812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world@sha256:82b0531509c36cf375793ce911d7b969deaa6032dae0454c3c2529879c11ac6f: .attestors[0].entries[0].keyless: no signatures found' verify-sbom-cyclonedx: check-sbom-cyclonedx: 'failed to verify image 812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world@sha256:82b0531509c36cf375793ce911d7b969deaa6032dae0454c3c2529879c11ac6f: .attestors[0].entries[0].keyless: no signatures found' verify-slsa-provenance: check-slsa-provenance: 'failed to verify image 812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world@sha256:82b0531509c36cf375793ce911d7b969deaa6032dae0454c3c2529879c11ac6f: .attestors[0].entries[0].keyless: no signatures found'",
-      "timestamp": "2026-08-15T13:01:32Z"
+      "message": "Error from server: admission webhook \"mutate.kyverno.svc-ignore\" denied the request: resource Pod/supply-chain-demo/tc-04 was blocked due to the following policies verify-image-signature: check-image-signature: 'failed to verify image 812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world@sha256:5d316da4039edf46bbddb586fc38dba29a26a9fa41138c55681f1ad99e17cbf9: .attestors[0].entries[0].keyless: no matching signatures' verify-sbom-cyclonedx: check-sbom-cyclonedx: 'failed to verify image 812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world@sha256:5d316da4039edf46bbddb586fc38dba29a26a9fa41138c55681f1ad99e17cbf9: .attestors[0].entries[0].keyless: no matching signatures' verify-slsa-provenance: check-slsa-provenance: 'failed to verify image 812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world@sha256:5d316da4039edf46bbddb586fc38dba29a26a9fa41138c55681f1ad99e17cbf9: .attestors[0].entries[0].keyless: no matching signatures'",
+      "timestamp": "2026-08-01T10:11:19Z"
     },
     {
       "scenario": "TC-05",
       "title": "Namespace scoping: the TC-04 unsigned image in the default namespace",
       "cloud": "aws",
-      "run_id": "31885975456",
+      "run_id": "30695147871",
       "requirements": [
         "SR-07"
       ],
@@ -131,10 +121,10 @@
       "outcome": "PASS",
       "expected_rule": "none (policy match scope)",
       "observed_rule": "",
-      "image": "812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world@sha256:82b0531509c36cf375793ce911d7b969deaa6032dae0454c3c2529879c11ac6f",
+      "image": "812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world@sha256:5d316da4039edf46bbddb586fc38dba29a26a9fa41138c55681f1ad99e17cbf9",
       "detail": "identical image to TC-04; only the namespace differs; pod phase Pending",
       "message": "pod/tc-05-scope created",
-      "timestamp": "2026-08-15T13:01:38Z"
+      "timestamp": "2026-08-01T10:11:24Z"
     }
   ]
 }

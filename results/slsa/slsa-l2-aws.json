@@ -1,0 +1,30 @@
+{
+  "run": {
+    "cloud": "aws",
+    "run_id": "31885975456",
+    "repository": "JMTeixeira23/DIMEI-k8s-2026",
+    "commit": "0a4a0f0ecbb279898a24bb6ccfee09fa0cbca4a1",
+    "run_url": "https://github.com/JMTeixeira23/DIMEI-k8s-2026/actions/runs/31885975456",
+    "generated": "2026-08-15T12:59:34Z"
+  },
+  "observed": {
+    "step_enabled": true,
+    "step_outcome": "success",
+    "image": "812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world@sha256:bdf6748294c852c6e9c8bdbacfd58284daa3aa94d1f2500de24ce2a2c8043481",
+    "subject_digest": "sha256:bdf6748294c852c6e9c8bdbacfd58284daa3aa94d1f2500de24ce2a2c8043481",
+    "bundle_present": true,
+    "predicate_type": "https://slsa.dev/provenance/v1",
+    "builder_id": "https://github.com/JMTeixeira23/DIMEI-k8s-2026/.github/workflows/supply-chain-pipeline.yml@refs/heads/main",
+    "bundle_subject": "812982728774.dkr.ecr.eu-west-1.amazonaws.com/supply-chain/hello-world@sha256:bdf6748294c852c6e9c8bdbacfd58284daa3aa94d1f2500de24ce2a2c8043481",
+    "verifies_independently": true,
+    "verify_output": ""
+  },
+  "claim": {
+    "level": "SLSA v1.0 Build Level 2",
+    "basis": "provenance generated and signed by the hosted build platform rather than by the build, of the SLSA v1.0 predicate type, verifying independently of the step that produced it",
+    "caveat": "the level is an interpretation of the facts in observed{}, not itself a measurement. The admission policy does not verify this attestation — it verifies the Cosign-stored one; see changes.md section 15."
+  },
+  "l1_path": {
+    "note": "unaffected by this step. gen_slsa_provenance.py and the cosign attest steps are unchanged, and the admission policy reads the Cosign attestation tag. Setting SLSA_L2=false removes this step and nothing else."
+  }
+}

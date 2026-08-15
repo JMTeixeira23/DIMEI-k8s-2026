@@ -9,6 +9,37 @@
 
 admissionController:
   replicas: 3
+
+  container:
+    # HOME for the credential helpers — see the extraVolumes note below (D31).
+    extraEnvVars:
+      - name: HOME
+        value: /.cache
+
+    # ── The image verification cache (defect D13, reopened) ──────────────────
+    #
+    # Kyverno v1.18.2 ships an image verification cache that v1.11.4 did not:
+    # imageVerifyCacheEnabled=true, maxSize=1000, TTL=1h. It changes what the
+    # latency experiment measures — a repeated admission of the same digest
+    # skips the Rekor round trip entirely — so cache state is now an explicit,
+    # recorded condition of that experiment rather than an ambient default.
+    #
+    # This file leaves the cache ON, which is the shipped default and what a
+    # production cluster runs. scripts/set-verify-cache.sh flips it for the
+    # cold-cache arm of the matrix and records which state was measured.
+    #
+    # ⚠️ THE VALUE MUST BE A QUOTED STRING. The chart renders extraArgs as
+    #      {{- range $key, $value := ...extraArgs }}
+    #      {{- if $value }}
+    #      - --{{ $key }}={{ $value }}
+    #    and a YAML boolean false is falsy in Go templates, so
+    #    `imageVerifyCacheEnabled: false` renders NOTHING and the flag silently
+    #    keeps its default. `"false"` is a non-empty string and renders.
+    #    Measured: false -> 0 occurrences, "false" -> 1, 0 -> 0.
+    #    This is the fifth silently-ignored-value defect in this project
+    #    (D6, D19, D27, D30, and now the chart's own template).
+    extraArgs:
+      imageVerifyCacheEnabled: "true"
   # serviceAccount annotations and podLabels for IRSA/Workload Identity are
   # set via --set in bootstrap.sh / bootstrap-azure.sh at install time.
 
@@ -38,6 +69,35 @@ admissionController:
   metricsService:
     create: true
     port: 8000
+
+  # ── A writable HOME for the registry credential helpers (defect D31) ───────
+  #
+  # The container runs with readOnlyRootFilesystem: true and the chart sets no
+  # HOME. The ECR credential helper resolves $HOME to "" and tries to cache its
+  # authorisation token at /.ecr/.config.json, which the read-only root refuses:
+  #
+  #   level=info msg="Could not save cache"
+  #     error="open /.ecr/.config.json.tmp2552917293: no such file or directory"
+  #
+  # Verification still succeeded, so this is not a correctness defect — but the
+  # token was re-fetched on EVERY image verification, putting an STS and an
+  # ecr:GetAuthorizationToken round trip inside every admission review. That is
+  # a cost the latency experiment would have measured and attributed to
+  # admission control.
+  #
+  # The fix follows the chart's own precedent: it already gives sigstore a
+  # writable emptyDir and points TUF_ROOT=/.sigstore at it. This does the same
+  # for HOME. Verified by rendering: HOME=/.cache and /.cache appears in the
+  # container's volumeMounts.
+  #
+  # NOTE: admissionController.extraVolumeMounts does not exist in chart 3.1.4 —
+  # the volume would be created and never mounted. Only valid from 3.8.x.
+  extraVolumes:
+    - name: home
+      emptyDir: {}
+  extraVolumeMounts:
+    - name: home
+      mountPath: /.cache
 
 backgroundController:
   replicas: 1
