@@ -62,6 +62,43 @@ note() { printf '   %s\n' "$1"; }
 cosign_version="$(cosign version 2>/dev/null | grep -i 'GitVersion' | awk '{print $2}')"
 [ -z "${cosign_version}" ] && cosign_version="$(cosign version 2>&1 | tail -1)"
 
+# ── Preflight: refuse to report an absence this script cannot distinguish from
+# an inability to look. The first run of this script reported both legacy tags
+# "ABSENT" when the reference was illegal, and "referrers: could not be listed"
+# when crane simply was not installed. Both read as findings. Neither was one.
+# A diagnostic that cannot tell "not there" from "did not look" is worse than
+# no diagnostic, because its output gets believed.
+preflight_fail=0
+if ! command -v crane >/dev/null 2>&1; then
+  echo "ERROR: crane is not installed." >&2
+  echo "       Without it this script cannot read the legacy tags or the OCI 1.1" >&2
+  echo "       referrers, and would report both as absent when it simply could" >&2
+  echo "       not look. Storage location is the whole question here." >&2
+  preflight_fail=1
+fi
+if ! command -v cosign >/dev/null 2>&1; then
+  echo "ERROR: cosign is not installed." >&2
+  preflight_fail=1
+else
+  _cv="$(cosign version 2>/dev/null | grep -i GitVersion | awk '{print $2}')"
+  case "${_cv}" in
+    v3.*) : ;;
+    "")   echo "WARNING: could not determine the cosign version." >&2 ;;
+    *)    echo "ERROR: local cosign is ${_cv}, but the pipeline signs with a 3.x." >&2
+          echo "       Cosign 2 cannot read the bundle format and referrer layout" >&2
+          echo "       that Cosign 3 writes, so a 'verify: FAIL' from this script" >&2
+          echo "       would say nothing about what Kyverno sees." >&2
+          preflight_fail=1 ;;
+  esac
+fi
+if [ "${preflight_fail}" = 1 ]; then
+  echo "" >&2
+  echo "  Fix with:  bash scripts/local/install-tools.sh" >&2
+  echo "             export PATH=\"\${PATH}:\${HOME}/.local/bin\"" >&2
+  echo "  Refusing to run rather than produce a result that reads as evidence." >&2
+  exit 3
+fi
+
 hdr "0. What is asking, and what is answering"
 note "image     : ${IMAGE_REF}"
 note "cosign    : ${cosign_version:-unknown}"
