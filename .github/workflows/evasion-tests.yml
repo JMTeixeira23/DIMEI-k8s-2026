@@ -243,6 +243,7 @@ jobs:
             --arg case_set         "$(printf '%s ' "${SCENARIOS[@]%%|*}" | sed 's/ $//')" \
             --arg context "$(kubectl config current-context)" \
             --argjson admission "$(bash scripts/webhook-state.sh)" \
+            --argjson nodes "$(bash scripts/node-state.sh)" \
             '{
                kubectl_context:        $context,
                kyverno_image:          $kyverno_image,
@@ -251,6 +252,7 @@ jobs:
                dispatched_ref:         $dispatched_ref,
                case_set:               $case_set,
                admission:              $admission,
+               nodes:                  $nodes,
                policies:               $policies
              }' > "${RESULTS_DIR}/_preflight.json"
 

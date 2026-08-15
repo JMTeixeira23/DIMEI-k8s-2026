@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# bootstrap-azure.sh — run once after `terraform apply` in terraform/azure/
+# bootstrap-azure.sh — run once after `terraform apply` in infrastructure/azure/
 # Installs Kyverno on AKS and applies all ClusterPolicies with registry injection.
 #
 # Usage:
-#   cd terraform/azure
-#   terraform apply -var="github_org=JMTeixeira23" -var="github_repo=DIMEI-k8s-2026" -var="location=northeurope" -auto-approve
+#   cd infrastructure/azure
+#   terraform apply -var="github_org=JMTeixeira23" -var="github_repo=DIMEI-k8s-2026" -var="location=swedencentral" -auto-approve
 #   cd ../..
 #   bash bootstrap-azure.sh
 #
@@ -66,11 +66,11 @@ kubectl get nodes
 # ── Step 3: Get Terraform outputs ─────────────────────────────────────────────
 echo ""
 echo "▶ Reading Terraform outputs..."
-KYVERNO_CLIENT_ID=$(cd terraform/azure && terraform output -raw kyverno_client_id)
-TENANT_ID=$(cd terraform/azure && terraform output -raw tenant_id)
-SUBSCRIPTION_ID=$(cd terraform/azure && terraform output -raw subscription_id)
-GITHUB_CLIENT_ID=$(cd terraform/azure && terraform output -raw github_actions_client_id)
-ACR_LOGIN_SERVER=$(cd terraform/azure && terraform output -raw acr_login_server)
+KYVERNO_CLIENT_ID=$(cd infrastructure/azure && terraform output -raw kyverno_client_id)
+TENANT_ID=$(cd infrastructure/azure && terraform output -raw tenant_id)
+SUBSCRIPTION_ID=$(cd infrastructure/azure && terraform output -raw subscription_id)
+GITHUB_CLIENT_ID=$(cd infrastructure/azure && terraform output -raw github_actions_client_id)
+ACR_LOGIN_SERVER=$(cd infrastructure/azure && terraform output -raw acr_login_server)
 REGISTRY="${ACR_LOGIN_SERVER}"
 
 echo "  Kyverno client ID: ${KYVERNO_CLIENT_ID}"
@@ -139,6 +139,60 @@ if ! kubectl get pods -n "${KYVERNO_NS}" \
   echo "  ⚠️  Pods are running without the federated token. Restarting..."
   kubectl rollout restart deployment/kyverno-admission-controller -n "${KYVERNO_NS}"
   kubectl rollout status  deployment/kyverno-admission-controller -n "${KYVERNO_NS}" --timeout=5m
+fi
+
+# ── ACR role assignments must exist in Azure, not merely in terraform state ──
+#
+# Defect D39. A `terraform destroy` followed by `apply` recreates the registry
+# with the *same* resource ID (same name, resource group and subscription).
+# Azure's RBAC garbage collector, processing the deletion of the old resource at
+# that scope, then removes the role assignments the apply had just created.
+# Terraform records them as created and never notices; `terraform plan` only
+# reports the drift on a later refresh.
+#
+# All three assignments scoped to the ACR were lost this way on 2026-08-15:
+#   AcrPush  for the GitHub Actions service principal  -> pipeline cannot push
+#   AcrPull  for the AKS kubelet identity              -> pods cannot pull
+#   AcrPull  for the Kyverno workload identity         -> signature verification
+#                                                         fails, and it looks
+#                                                         like a policy failure
+#
+# The last one is why this check exists rather than leaving the pipeline to fail:
+# a missing AcrPull on Kyverno produces denials that read like a broken policy,
+# which is the most expensive kind of wrong answer for this thesis to collect.
+echo ""
+echo "▶ Verifying the ACR role assignments exist in Azure..."
+# Derived from REGISTRY (set above from ACR_LOGIN_SERVER) so this follows
+# whatever registry the deployment actually uses, rather than a hardcoded name.
+ACR_NAME="${REGISTRY%%.azurecr.io}"
+ACR_ID=$(az acr show -n "${ACR_NAME}" -g "${RESOURCE_GROUP}" \
+         --query id -o tsv 2>/dev/null || true)
+
+if [ -z "${ACR_ID}" ]; then
+  echo "  ⚠️  Could not resolve the ACR '${ACR_NAME}' — skipping the RBAC check."
+  echo "     (Not fatal here; the pipeline will surface it.)"
+else
+  ACR_ROLES=$(az role assignment list --scope "${ACR_ID}" \
+              --query "[].roleDefinitionName" -o tsv 2>/dev/null | sort -u | tr '\n' ' ')
+  MISSING=""
+  printf '%s' "${ACR_ROLES}" | grep -q 'AcrPush' || MISSING="${MISSING} AcrPush"
+  printf '%s' "${ACR_ROLES}" | grep -q 'AcrPull' || MISSING="${MISSING} AcrPull"
+
+  if [ -n "${MISSING}" ]; then
+    echo ""
+    echo "  ❌ Missing role assignment(s) on ${ACR_NAME}:${MISSING}"
+    echo "     Found at that scope: ${ACR_ROLES:-none}"
+    echo ""
+    echo "     This is defect D39 — terraform state claims these exist. Re-run"
+    echo "     apply from infrastructure/azure/ to recreate them, then re-run"
+    echo "     this script. Do NOT run the experiments against this cluster:"
+    echo "     a missing AcrPull on Kyverno is indistinguishable from a policy"
+    echo "     that legitimately denied the image."
+    echo "       terraform apply -var=\"github_org=...\" -var=\"github_repo=...\" \\"
+    echo "         -var=\"location=swedencentral\""
+    exit 6
+  fi
+  echo "  ✅ ACR role assignments present: ${ACR_ROLES}"
 fi
 
 # ── Remove the policy webhook ────────────────────────────────────────────────
@@ -215,9 +269,9 @@ echo ""
 echo "▶ Applying ClusterPolicies (Enforce mode, registry: ${REGISTRY})..."
 mkdir -p /tmp/kyverno-rendered
 
-for f in kyverno/verify-image-signature.yaml \
-          kyverno/verify-sbom-cyclonedx.yaml \
-          kyverno/verify-slsa-provenance.yaml; do
+for f in policies/verify-image-signature.yaml \
+          policies/verify-sbom-cyclonedx.yaml \
+          policies/verify-slsa-provenance.yaml; do
   sed "s|REGISTRY_PLACEHOLDER|${REGISTRY}|g" "${f}" \
     > "/tmp/kyverno-rendered/$(basename ${f})"
 done

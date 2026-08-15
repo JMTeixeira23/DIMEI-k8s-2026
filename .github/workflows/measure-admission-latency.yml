@@ -339,10 +339,12 @@ jobs:
             --arg run_url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
             --arg generated "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --argjson admission "$(bash scripts/webhook-state.sh)" \
+            --argjson nodes "$(bash scripts/node-state.sh)" \
             '{cloud: $cloud, probe_image: $image, kyverno_image: $kyverno_image,
               kyverno_ready_replicas: $replicas, admission_controller_args: $args,
               mutating_webhook_failure_policies: $webhooks,
               admission: $admission,
+              nodes:     $nodes,
               image_verify_cache_flag: $cache_flag,
               image_verify_cache_enabled: $cache_enabled,
               kubectl_context: $context,
@@ -478,6 +480,7 @@ jobs:
             --arg generated "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --arg runner "$(nproc) vCPU, $(free -m | awk '/^Mem:/{print $2}') MB" \
             --argjson admission "$(bash scripts/webhook-state.sh)" \
+            --argjson nodes "$(bash scripts/node-state.sh)" \
             '{cloud: $cloud, probe_image: $image, probe_namespace: $namespace,
               experiment: "admission cost under concurrent pod creation",
               concurrency_levels: $levels, requests_per_level: $requests,
@@ -485,6 +488,7 @@ jobs:
               image_verify_cache_enabled: $cache_enabled,
               admission_controller_args: $args,
               runner: $runner, admission: $admission,
+              nodes:                      $nodes,
               run_url: $run_url, generated: $generated}' \
             > "${RESULTS_DIR}/_environment.json"
 
@@ -789,12 +793,14 @@ jobs:
             --arg generated "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --argjson images "$(cat /tmp/size-refs/_sizes.json)" \
             --argjson admission "$(bash scripts/webhook-state.sh)" \
+            --argjson nodes "$(bash scripts/node-state.sh)" \
             '{cloud: $cloud, kyverno_image: $kyverno_image,
               kyverno_ready_replicas: $replicas, probe_namespace: $namespace,
               experiment: "image size vs admission cost",
               image_verify_cache_enabled: $cache_enabled,
               admission_controller_args: $args,
               images: $images, admission: $admission,
+              nodes:                      $nodes,
               run_url: $run_url, generated: $generated}' \
             > "${RESULTS_DIR}/_environment.json"
 

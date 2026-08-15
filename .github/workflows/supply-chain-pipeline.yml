@@ -527,10 +527,12 @@ jobs:
               -o jsonpath='{.metadata.labels.kyverno\.io/exclude}' 2>/dev/null || echo '')" \
             --argjson policies "${POLICY_STATE}" \
             --argjson admission "$(bash scripts/webhook-state.sh)" \
+            --argjson nodes "$(bash scripts/node-state.sh)" \
             '{kubectl_context: $context, kyverno_image: $kyverno_image,
               kyverno_ready_replicas: $replicas,
               default_namespace_exclude_label: $default_ns_label,
               admission: $admission,
+              nodes:     $nodes,
               policies: $policies}' \
             > "${RESULTS_DIR}/_preflight.json"
 

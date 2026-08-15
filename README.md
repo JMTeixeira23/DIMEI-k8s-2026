@@ -69,6 +69,9 @@ scripts/
                                       recorded condition of every performance run, not a default
   policy-ready.sh                   — One reader for ClusterPolicy readiness across Kyverno versions
   webhook-state.sh                  — Prints the admission configuration an evidence run executed under
+  node-state.sh                     — Prints the worker hardware an evidence run executed on; the two
+                                      clouds run different instance families, so it is a condition of
+                                      every latency number rather than background detail
   version-audit.sh                  — Pinned versions vs upstream, and why each pin is where it is
   diagnose-image-verification.sh    — Read-only: why did Kyverno deny an image Cosign verified?
 
@@ -169,10 +172,11 @@ Bootstrap: configures kubeconfig, imports and updates the Kyverno IAM role trust
 
 ```bash
 cd infrastructure/azure
+terraform init
 terraform apply \
   -var="github_org=JMTeixeira23" \
   -var="github_repo=DIMEI-k8s-2026" \
-  -var="location=northeurope" \
+  -var="location=swedencentral" \
   -auto-approve
 
 cd ../..
@@ -378,11 +382,11 @@ The full stack is reproducible from code. To verify:
 ```bash
 # Destroy
 cd infrastructure/aws   && terraform destroy -var="github_org=JMTeixeira23" -var="github_repo=DIMEI-k8s-2026" -auto-approve
-cd ../azure        && terraform destroy -var="github_org=JMTeixeira23" -var="github_repo=DIMEI-k8s-2026" -var="location=northeurope" -auto-approve
+cd ../azure        && terraform destroy -var="github_org=JMTeixeira23" -var="github_repo=DIMEI-k8s-2026" -var="location=swedencentral" -auto-approve
 
 # Rebuild
 cd infrastructure/aws   && terraform apply -var="github_org=JMTeixeira23" -var="github_repo=DIMEI-k8s-2026" -auto-approve
-cd ../azure        && terraform apply -var="github_org=JMTeixeira23" -var="github_repo=DIMEI-k8s-2026" -var="location=northeurope" -auto-approve
+cd ../azure        && terraform apply -var="github_org=JMTeixeira23" -var="github_repo=DIMEI-k8s-2026" -var="location=swedencentral" -auto-approve
 
 cd ~/DIMEI/DIMEI-k8s-2026
 bash bootstrap-aws.sh

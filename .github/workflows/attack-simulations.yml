@@ -251,6 +251,7 @@ jobs:
             --arg default_ns_exclude_label "${NS_EXCLUDE_LABEL:-none}" \
             --arg context "$(kubectl config current-context)" \
             --argjson admission "$(bash scripts/webhook-state.sh)" \
+            --argjson nodes "$(bash scripts/node-state.sh)" \
             '{
                kubectl_context:          $context,
                kyverno_image:            $kyverno_image,
@@ -258,6 +259,7 @@ jobs:
                webhook_failure_policies: $webhook_failure_policies,
                default_ns_exclude_label: $default_ns_exclude_label,
                admission:                $admission,
+               nodes:                    $nodes,
                policies:                 $policies
              }' > "${RESULTS_DIR}/_preflight.json"
 
