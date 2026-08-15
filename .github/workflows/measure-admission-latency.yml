@@ -263,19 +263,37 @@ jobs:
             | jq -r '[.items[] | select(.metadata.name | test("kyverno"))
                       | .webhooks[] | "\(.name)=\(.failurePolicy)"] | join(" ")' || true)
 
-          # Does this Kyverno build know about the image verification cache?
-          # Recorded as an observation, never assumed: the flag arrived in a
-          # later release than the chart pinned here may install.
+          # Does this Kyverno build know about the image verification cache,
+          # and — the part that matters — is it ON or OFF for this run?
+          #
+          # This used to record only `present-in-args`, which was enough when
+          # the flag's presence was the whole question (Kyverno v1.11.4 did not
+          # have it at all — defect D13). It is not enough now. v1.18.2 enables
+          # the cache by default, so the latency matrix is run twice, once with
+          # it on and once off, and the two artefacts would have been
+          # INDISTINGUISHABLE under the old recording: both `present-in-args`.
+          # Two arms of a comparison that cannot be told apart is worse than no
+          # comparison. The effective value is recorded instead.
           CACHE_FLAG="unknown"
+          CACHE_ENABLED="unknown"
           if printf '%s' "${ARGS}" | grep -q "imageVerifyCache"; then
             CACHE_FLAG="present-in-args"
+            CACHE_ENABLED=$(printf '%s' "${ARGS}" | tr ' ' '\n' \
+              | sed -n 's/^--imageVerifyCacheEnabled=//p' | head -1)
+            CACHE_ENABLED="${CACHE_ENABLED:-unknown}"
           elif kubectl exec -n kyverno deploy/kyverno-admission-controller -- \
                  /kyverno --help 2>&1 | grep -qi "imageVerifyCache"; then
+            # Supported but not passed explicitly, so whatever the build
+            # defaults to. v1.18.2 defaults to enabled.
             CACHE_FLAG="supported"
+            CACHE_ENABLED="default-for-build"
           else
             CACHE_FLAG="not-supported"
+            CACHE_ENABLED="false"
           fi
-          echo "cache_flag=${CACHE_FLAG}" >> $GITHUB_OUTPUT
+          echo "  image verification cache: ${CACHE_FLAG} / enabled=${CACHE_ENABLED}"
+          echo "cache_flag=${CACHE_FLAG}"       >> $GITHUB_OUTPUT
+          echo "cache_enabled=${CACHE_ENABLED}" >> $GITHUB_OUTPUT
 
           jq -n \
             --arg cloud "${CLOUD}" \
@@ -285,6 +303,7 @@ jobs:
             --arg args "${ARGS:-unknown}" \
             --arg webhooks "${WEBHOOKS:-unknown}" \
             --arg cache_flag "${CACHE_FLAG}" \
+            --arg cache_enabled "${CACHE_ENABLED}" \
             --arg context "$(kubectl config current-context)" \
             --arg namespace "${NAMESPACE}" \
             --arg run_url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
@@ -294,7 +313,9 @@ jobs:
               kyverno_ready_replicas: $replicas, admission_controller_args: $args,
               mutating_webhook_failure_policies: $webhooks,
               admission: $admission,
-              image_verify_cache_flag: $cache_flag, kubectl_context: $context,
+              image_verify_cache_flag: $cache_flag,
+              image_verify_cache_enabled: $cache_enabled,
+              kubectl_context: $context,
               probe_namespace: $namespace, run_url: $run_url, generated: $generated}' \
             > "${RESULTS_DIR}/_environment.json"
 
