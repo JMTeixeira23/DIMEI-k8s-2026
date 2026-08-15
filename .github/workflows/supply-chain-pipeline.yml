@@ -167,8 +167,15 @@ jobs:
       # certificate. The cert + signature are recorded in Rekor (public log).
       # No private keys involved - the identity is the workflow path itself.
 
+      # The installer verifies the cosign binary it downloads before putting it
+      # on PATH, which is why this step is an action rather than the plain curl
+      # the other workflows use. That verification is version-coupled: cosign 3.x
+      # stopped publishing detached `.sig` files and publishes `.sigstore.json`
+      # keyless bundles instead. The v3 installer line only knows how to fetch
+      # `.sig`, so it 404s (curl exit 22) on any 3.x release. The v4 line branches
+      # on the bundle. Defect D28.
       - name: Install Cosign
-        uses: sigstore/cosign-installer@v3
+        uses: sigstore/cosign-installer@v4.1.2
         with:
           cosign-release: v3.1.2
 

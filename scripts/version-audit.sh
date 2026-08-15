@@ -39,6 +39,10 @@ source ./versions.env
 pin_kyverno="${KYVERNO_CHART_VERSION} (app ${KYVERNO_APP_VERSION})"
 pin_cosign=$(grep -ohP 'cosign/releases/download/\Kv[0-9.]+' .github/workflows/*.yml 2>/dev/null | sort -u | paste -sd, -)
 pin_cosign_action=$(grep -ohP 'cosign-release: \K\S+' .github/workflows/*.yml 2>/dev/null | sort -u | paste -sd, -)
+# The action tag itself, not just the cosign version it is asked for. These two
+# are coupled — the installer has to know the release-asset layout of the cosign
+# it fetches — and auditing only the second missed defect D28.
+pin_cosign_installer=$(grep -ohP 'sigstore/cosign-installer@\K\S+' .github/workflows/*.yml 2>/dev/null | sort -u | paste -sd, -)
 pin_syft=$(grep -ohP 'syft/releases/download/\Kv[0-9.]+' .github/workflows/*.yml 2>/dev/null | sort -u | paste -sd, -)
 pin_crane=$(grep -ohP 'go-containerregistry/releases/download/\Kv[0-9.]+' .github/workflows/*.yml 2>/dev/null | sort -u | paste -sd, -)
 
@@ -62,6 +66,7 @@ helm_latest_kyverno() {
 
 lat_kyverno=$(helm_latest_kyverno)
 lat_cosign=$(gh_latest sigstore/cosign)
+lat_cosign_installer=$(gh_latest sigstore/cosign-installer)
 lat_syft=$(gh_latest anchore/syft)
 lat_crane=$(gh_latest google/go-containerregistry)
 
@@ -91,6 +96,8 @@ row "Cosign (workflows)"    "${pin_cosign}"          "${lat_cosign}"   "UNDER TE
     "produces the signatures Kyverno verifies"
 row "Cosign (installer)"    "${pin_cosign_action}"   "${lat_cosign}"   "UNDER TEST" \
     "same binary, pipeline path"
+row "cosign-installer tag"  "${pin_cosign_installer}" "${lat_cosign_installer}" "harness" \
+    "must match the cosign major it fetches: v3 line cannot install cosign 3.x"
 row "Syft"                  "${pin_syft}"            "${lat_syft}"     "UNDER TEST" \
     "produces the SBOMs Kyverno verifies"
 row "crane"                 "${pin_crane}"           "${lat_crane}"    "scaffolding" \
