@@ -23,7 +23,7 @@ echo "🔧 Installing tools for ${OS}/${ARCH} into ${BIN}"
 
 # cosign
 echo "  → cosign ${COSIGN_VERSION}"
-curl -sSLo "${BIN}/cosign" \
+curl -sSfLo "${BIN}/cosign" \
   "https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign-${OS}-${ARCH}"
 chmod +x "${BIN}/cosign"
 
@@ -37,10 +37,21 @@ tar -xzf /tmp/syft.tar.gz -C "${BIN}" syft
 chmod +x "${BIN}/syft"
 rm /tmp/syft.tar.gz
 
-# crane (OCI registry inspection — useful for Phase 4 debugging)
+# crane (OCI registry inspection — the tool that answers "what is actually in
+# the registry", which is the only way to settle a storage-location question)
+#
+# go-containerregistry does NOT use the same asset naming as cosign and syft:
+# the OS is capitalised and the architecture is uname's, so it is
+# `go-containerregistry_Linux_x86_64.tar.gz`, not `..._linux_amd64...`. This
+# line used to build the lowercase/amd64 name, 404, and — because the curl had
+# no -f — write the 404 page into the tarball, so the failure surfaced as
+# "gzip: stdin: not in gzip format" and left the old crane in place. Every curl
+# here now uses -f so a bad URL fails as a bad URL.
 echo "  → crane ${CRANE_VERSION}"
-curl -sSLo /tmp/crane.tar.gz \
-  "https://github.com/google/go-containerregistry/releases/download/${CRANE_VERSION}/go-containerregistry_${OS}_${ARCH}.tar.gz"
+CRANE_OS=$(uname -s)                       # Linux / Darwin, capitalised
+CRANE_ARCH=$(uname -m)                     # x86_64 / arm64
+curl -sSfLo /tmp/crane.tar.gz \
+  "https://github.com/google/go-containerregistry/releases/download/${CRANE_VERSION}/go-containerregistry_${CRANE_OS}_${CRANE_ARCH}.tar.gz"
 tar -xzf /tmp/crane.tar.gz -C "${BIN}" crane
 chmod +x "${BIN}/crane"
 rm /tmp/crane.tar.gz

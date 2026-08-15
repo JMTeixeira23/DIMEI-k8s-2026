@@ -113,31 +113,81 @@ note "kyverno   : ${kyverno_image:-<no cluster access>}"
 
 hdr "1. Storage location — legacy tags vs OCI 1.1 referrers"
 
-legacy_sig="absent"; legacy_att="absent"
-if crane manifest "${SIG_TAG}" >/tmp/d29-sig.json 2>/dev/null; then
-  legacy_sig="present"
-  note "legacy signature tag PRESENT : ${SIG_TAG}"
-  note "  mediaType: $(jq -r '.mediaType // "?"' /tmp/d29-sig.json)"
-  note "  layers   : $(jq -r '[.layers[].mediaType] | join(", ")' /tmp/d29-sig.json 2>/dev/null)"
-else
-  note "legacy signature tag ABSENT  : ${SIG_TAG}"
-fi
+# ── Never report an absence that might be a refusal ──────────────────────────
+# Third time this bit: an illegal reference, then a missing crane, then an
+# expired ECR token, each rendered as "ABSENT" — a finding-shaped string for a
+# question that was never asked. `absent` and `denied` are different answers and
+# this function keeps them different. A 404/MANIFEST_UNKNOWN means the artefact
+# is not there; a 401/403/DENIED means we were not allowed to look, and the only
+# honest output then is to stop.
+probe_manifest() {  # probe_manifest <ref> <outfile> ; echoes present|absent|denied|error
+  local ref="$1" out="$2" err
+  if crane manifest "${ref}" >"${out}" 2>/tmp/d29-err; then
+    echo present; return
+  fi
+  err="$(tr '[:upper:]' '[:lower:]' < /tmp/d29-err)"
+  case "${err}" in
+    *denied*|*unauthorized*|*authentication*|*"401"*|*"403"*|*"token has expired"*) echo denied ;;
+    *manifest_unknown*|*name_unknown*|*not_found*|*"404"*)                          echo absent ;;
+    *)                                                                              echo error  ;;
+  esac
+}
 
-if crane manifest "${ATT_TAG}" >/tmp/d29-att.json 2>/dev/null; then
-  legacy_att="present"
-  note "legacy attestation tag PRESENT: ${ATT_TAG}"
-  note "  layers   : $(jq -r '[.layers[].mediaType] | join(", ")' /tmp/d29-att.json 2>/dev/null)"
-else
-  note "legacy attestation tag ABSENT : ${ATT_TAG}"
+# The image itself must be readable, or nothing below means anything.
+registry_access="$(probe_manifest "${IMAGE_REF}" /tmp/d29-img.json)"
+if [ "${registry_access}" != "present" ]; then
+  note "cannot read the image manifest itself: ${registry_access}"
+  sed 's/^/     /' /tmp/d29-err | head -4
+  echo ""
+  if [ "${registry_access}" = "denied" ]; then
+    echo "  ERROR: the registry refused the request — the credentials are missing" >&2
+    echo "         or expired. Every probe below would report 'absent' when the" >&2
+    echo "         truth is 'not allowed to look', which is exactly the false" >&2
+    echo "         finding this script exists to avoid. Re-authenticate:" >&2
+    echo "" >&2
+    echo "           aws ecr get-login-password --region ${IMAGE_REF#*.dkr.ecr.} \\" >&2
+    echo "             | sed 's/\\.amazonaws\\.com.*//' >/dev/null  # region is in the host" >&2
+    echo "           aws ecr get-login-password --region <region> \\" >&2
+    echo "             | crane auth login --username AWS --password-stdin \\" >&2
+    echo "                 ${REPO_PART%%/*}" >&2
+  else
+    echo "  ERROR: the image manifest could not be read (${registry_access})." >&2
+  fi
+  exit 4
 fi
+note "image manifest readable — the registry is answering us"
 
-referrer_count=0; referrer_types=""
-if crane referrers "${IMAGE_REF}" >/tmp/d29-ref.json 2>/dev/null; then
+legacy_sig="$(probe_manifest "${SIG_TAG}" /tmp/d29-sig.json)"
+case "${legacy_sig}" in
+  present)
+    note "legacy signature tag PRESENT : ${SIG_TAG}"
+    note "  mediaType: $(jq -r '.mediaType // "?"' /tmp/d29-sig.json)"
+    note "  layers   : $(jq -r '[.layers[].mediaType] | join(", ")' /tmp/d29-sig.json 2>/dev/null)"
+    ;;
+  absent)  note "legacy signature tag ABSENT  : ${SIG_TAG}  (404 — genuinely not there)" ;;
+  *)       note "legacy signature tag UNKNOWN : ${legacy_sig} — NOT a finding" ;;
+esac
+
+legacy_att="$(probe_manifest "${ATT_TAG}" /tmp/d29-att.json)"
+case "${legacy_att}" in
+  present)
+    note "legacy attestation tag PRESENT: ${ATT_TAG}"
+    note "  layers   : $(jq -r '[.layers[].mediaType] | join(", ")' /tmp/d29-att.json 2>/dev/null)"
+    ;;
+  absent)  note "legacy attestation tag ABSENT : ${ATT_TAG}  (404 — genuinely not there)" ;;
+  *)       note "legacy attestation tag UNKNOWN: ${legacy_att} — NOT a finding" ;;
+esac
+
+referrer_count=0; referrer_types=""; referrer_state="unknown"
+if crane referrers "${IMAGE_REF}" >/tmp/d29-ref.json 2>/tmp/d29-referr; then
+  referrer_state="listed"
   referrer_count="$(jq -r '.manifests | length' /tmp/d29-ref.json 2>/dev/null || echo 0)"
   referrer_types="$(jq -r '[.manifests[].artifactType] | join(", ")' /tmp/d29-ref.json 2>/dev/null)"
   note "OCI 1.1 referrers: ${referrer_count} — ${referrer_types:-none}"
 else
-  note "OCI 1.1 referrers: could not be listed (crane missing, or registry has no Referrers API)"
+  referrer_state="could-not-list"
+  note "OCI 1.1 referrers: COULD NOT LIST — this is not the same as 'none'"
+  sed 's/^/     /' /tmp/d29-referr | head -3
 fi
 
 hdr "1b. cosign's own view of the tree"
@@ -203,6 +253,8 @@ jq -n \
   --arg legacy_att "${legacy_att}" \
   --arg referrers "${referrer_count}" \
   --arg referrer_types "${referrer_types}" \
+  --arg referrer_state "${referrer_state}" \
+  --arg registry_access "${registry_access}" \
   --arg cosign_verify "${cosign_verify}" \
   --arg tlog "${tlog_urls}" \
   --arg klog "${kyverno_log}" \
@@ -217,6 +269,8 @@ jq -n \
        kyverno_image: $kyverno,
        legacy_signature_tag: $legacy_sig,
        legacy_attestation_tag: $legacy_att,
+       registry_access: $registry_access,
+       oci_1_1_referrer_listing: $referrer_state,
        oci_1_1_referrer_count: ($referrers | tonumber? // 0),
        oci_1_1_referrer_types: $referrer_types,
        independent_cosign_verify: $cosign_verify,
@@ -228,8 +282,12 @@ jq -n \
          (if $legacy_sig == "absent" and (($referrers | tonumber? // 0) > 0)
           then "CONSISTENT — cosign wrote OCI 1.1 referrers and nothing at the legacy tag Kyverno reads"
           elif $legacy_sig == "present"
-          then "NOT the cause — the legacy tag Kyverno reads does exist"
-          else "INCONCLUSIVE — neither location could be read from here" end),
+          then "NOT a storage problem — the legacy tag Kyverno reads does exist; compare its layer mediaTypes against what Kyverno expects, because the question is then FORMAT, not location"
+          elif $legacy_sig == "absent" and $referrer_state != "listed"
+          then "INCOMPLETE — the legacy tag is genuinely absent (404), but the referrers could not be listed, so where cosign DID write is still unknown"
+          elif $legacy_sig == "absent"
+          then "PUZZLE — legacy tag absent and zero referrers, yet cosign verified this image in CI. Something is being read from a third place; do not guess"
+          else "NOT ESTABLISHED — the legacy tag could not be read (\($legacy_sig)). This is not evidence of absence" end),
        caveat: "These readings say which hypotheses the observations are consistent with. They are not a diagnosis. The Kyverno log line is the authority; everything else is circumstantial."
      }
    }' > "${OUT}"
