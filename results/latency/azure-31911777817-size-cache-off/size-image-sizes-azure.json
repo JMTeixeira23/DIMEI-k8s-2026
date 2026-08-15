@@ -1,0 +1,30 @@
+[
+  {
+    "name": "small",
+    "image_ref": "supplychainthesis.azurecr.io/supply-chain/hello-world@sha256:4d88ed8255af9ea68b2727e08fb9b159fe43ac45084130e28f715e7b269b046a",
+    "digest": "sha256:4d88ed8255af9ea68b2727e08fb9b159fe43ac45084130e28f715e7b269b046a",
+    "compressed_bytes": 3421106,
+    "layer_count": 1
+  },
+  {
+    "name": "medium",
+    "image_ref": "supplychainthesis.azurecr.io/supply-chain/hello-world@sha256:da97f5f2bb7664aee5ce9af78e8ecd88926f1839704219e242167375bd8a99f5",
+    "digest": "sha256:da97f5f2bb7664aee5ce9af78e8ecd88926f1839704219e242167375bd8a99f5",
+    "compressed_bytes": 10666665,
+    "layer_count": 2
+  },
+  {
+    "name": "large",
+    "image_ref": "supplychainthesis.azurecr.io/supply-chain/hello-world@sha256:38c5d99897158cfee23a1e746971fe2afc6ab4d919c9a69005237d21df9b32dd",
+    "digest": "sha256:38c5d99897158cfee23a1e746971fe2afc6ab4d919c9a69005237d21df9b32dd",
+    "compressed_bytes": 72438048,
+    "layer_count": 5
+  },
+  {
+    "name": "xlarge",
+    "image_ref": "supplychainthesis.azurecr.io/supply-chain/hello-world@sha256:b4bc79523e1a2df5deeb3b0b59110bba8cea035b740067c6bb1622b8b5741f1b",
+    "digest": "sha256:b4bc79523e1a2df5deeb3b0b59110bba8cea035b740067c6bb1622b8b5741f1b",
+    "compressed_bytes": 115866307,
+    "layer_count": 7
+  }
+]

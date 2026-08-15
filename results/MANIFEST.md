@@ -9,8 +9,11 @@ Superseded artefacts are kept on purpose: they are the evidence behind the disse
 | Experiment | State | Run | Date | Kyverno | Admission | Cache | Result | Artefact |
 |---|---|---|---|---|---|---|---|---|
 | SLSA Build L2 provenance | **current** | `31885975456` | 2026-08-15 | n/a (build-side) | -- | -- | SLSA v1.0 Build Level 2 | `results/slsa/slsa-l2-aws.json` |
+| SLSA Build L2 provenance | **current** | `31908665287` | 2026-08-15 | n/a (build-side) | -- | -- | SLSA v1.0 Build Level 2 | `results/slsa/slsa-l2-azure.json` |
 | admission latency matrix | **current** | `31892458755` | 2026-08-15 | v1.18.2 | fail-open | off | 3 conditions | `results/latency/aws-31892458755-cache-off/latency-aws.json` |
 | admission latency matrix | **current** | `31893322126` | 2026-08-15 | v1.18.2 | fail-open | on | 3 conditions | `results/latency/aws-31893322126-cache-on/latency-aws.json` |
+| admission latency matrix | **current** | `31911476700` | 2026-08-15 | v1.18.2 | fail-open | off | 3 conditions | `results/latency/azure-31911476700-cache-off/latency-azure.json` |
+| admission latency matrix | **current** | `31912661182` | 2026-08-15 | v1.18.2 | fail-open | on | 3 conditions | `results/latency/azure-31912661182-cache-on/latency-azure.json` |
 | admission latency matrix | superseded | `30692789440` | 2026-08-01 | v1.11.4 | -- | -- | 3 conditions | `results/latency/aws-30692789440/latency-aws.json` |
 | admission latency matrix | superseded | `30704230504` | 2026-08-01 | v1.11.4 | fail-open | -- | 3 conditions | `results/latency/aws-30704230504/latency-aws.json` |
 | admission latency matrix | superseded | `30706207673` | 2026-08-01 | v1.11.4 | fail-closed | -- | 3 conditions | `results/failure-policy/aws-latency-fail-closed-30706207673/latency-aws.json` |
@@ -18,23 +21,33 @@ Superseded artefacts are kept on purpose: they are the evidence behind the disse
 | attack simulations | **current** | `31886676002` | 2026-08-15 | v1.18.2 | fail-open | -- | 7/7 | `results/attacks/attack-results-aws.json` |
 | attack simulations | **current** | `31886676002` | 2026-08-15 | v1.18.2 | fail-open | -- | 7/7 | `results/failure-policy/aws-fail-open-31886676002/attack-results-aws.json` |
 | attack simulations | **current** | `31887855859` | 2026-08-15 | v1.18.2 | fail-closed | -- | 7/7 | `results/failure-policy/aws-fail-closed-31887855859/attack-results-aws.json` |
+| attack simulations | **current** | `31908818193` | 2026-08-15 | v1.18.2 | fail-open | -- | 7/7 | `results/attacks/attack-results-azure.json` |
+| attack simulations | **current** | `31908818193` | 2026-08-15 | v1.18.2 | fail-open | -- | 7/7 | `results/failure-policy/azure-fail-open-31908818193/attack-results-azure.json` |
+| attack simulations | **current** | `31908985509` | 2026-08-15 | v1.18.2 | fail-closed | -- | 7/7 | `results/failure-policy/azure-fail-closed-31908985509/attack-results-azure.json` |
 | attack simulations | superseded | `30671821487` | 2026-07-31 | v1.11.4 | -- | -- | 7/7 | `results/attacks/superseded-aws-30671821487-kyverno-v1.11.4/attack-results-aws.json` |
 | attack simulations | superseded | `30703180555` | 2026-08-01 | v1.11.4 | fail-open | -- | 7/7 | `results/failure-policy/aws-fail-open-30703180555/attack-results-aws.json` |
 | attack simulations | superseded | `30704165579` | 2026-08-01 | v1.11.4 | fail-closed | -- | 7/7 | `results/failure-policy/aws-fail-closed-30704165579/attack-results-aws.json` |
+| concurrency sweep | **current** | `31912212433` | 2026-08-15 | v1.18.2 | fail-open | off | 5 conditions | `results/concurrency/azure-31912212433-cache-off/concurrency-azure.json` |
+| concurrency sweep | **current** | `31913360282` | 2026-08-15 | v1.18.2 | fail-open | on | 5 conditions | `results/concurrency/azure-31913360282-cache-on/concurrency-azure.json` |
 | concurrency sweep | _undetermined_ | `30722911694` | 2026-08-01 | unknown | fail-open | -- | 5 conditions | `results/concurrency/aws-30722911694/concurrency-aws.json` |
 | concurrency sweep | _undetermined_ | `31894663949` | 2026-08-15 | unknown | fail-open | -- | 5 conditions | `results/concurrency/aws-31894663949-cache-off/concurrency-aws.json` |
 | concurrency sweep | _undetermined_ | `31895209590` | 2026-08-15 | unknown | fail-open | -- | 5 conditions | `results/concurrency/aws-31895209590-cache-on/concurrency-aws.json` |
 | concurrency sweep | _undetermined_ | `?` | ? | -- | -- | -- | 5 entries (array) | `results/concurrency/aws-30722911694/concurrency-throughput-aws.json` |
 | evasion suite | **current** | `31888272847` | 2026-08-15 | v1.18.2 | fail-open | -- | 3/3 | `results/evasion/aws-31888272847-main/evasion-results-aws.json` |
 | evasion suite | **current** | `31888450460` | 2026-08-15 | v1.18.2 | fail-open | -- | 1/1 | `results/evasion/aws-31888450460-branch/evasion-results-aws.json` |
+| evasion suite | **current** | `31909412195` | 2026-08-15 | v1.18.2 | fail-open | -- | 3/3 | `results/evasion/azure-31909412195-main/evasion-results-azure.json` |
+| evasion suite | **current** | `31909577097` | 2026-08-15 | v1.18.2 | fail-open | -- | 1/1 | `results/evasion/azure-31909577097-branch/evasion-results-azure.json` |
 | evasion suite | superseded | `30725994664` | 2026-08-02 | v1.11.4 | fail-open | -- | 3/3 | `results/evasion/aws-30725994664-main/evasion-results-aws.json` |
 | evasion suite | superseded | `30726358408` | 2026-08-02 | v1.11.4 | fail-open | -- | 1/1 | `results/evasion/aws-30726358408-branch/evasion-results-aws.json` |
 | image size vs cost | **current** | `31894106144` | 2026-08-15 | v1.18.2 | fail-open | -- | 4 conditions | `results/latency/aws-31894106144-size-cache-on/size-latency-aws.json` |
 | image size vs cost | **current** | `31896370075` | 2026-08-15 | v1.18.2 | fail-open | -- | 4 conditions | `results/latency/aws-31896370075-size-cache-off/size-latency-aws.json` |
+| image size vs cost | **current** | `31911777817` | 2026-08-15 | v1.18.2 | fail-open | off | 4 conditions | `results/latency/azure-31911777817-size-cache-off/size-latency-azure.json` |
+| image size vs cost | **current** | `31912903450` | 2026-08-15 | v1.18.2 | fail-open | on | 4 conditions | `results/latency/azure-31912903450-size-cache-on/size-latency-azure.json` |
 | image size vs cost | superseded | `30692789440` | 2026-08-01 | v1.11.4 | -- | -- | 4 conditions | `results/latency/aws-30692789440/size-latency-aws.json` |
 | image size vs cost | superseded | `30704230504` | 2026-08-01 | v1.11.4 | fail-open | -- | 4 conditions | `results/latency/aws-30704230504/size-latency-aws.json` |
 | image size vs cost | superseded | `30706207673` | 2026-08-01 | v1.11.4 | fail-closed | -- | 4 conditions | `results/failure-policy/aws-latency-fail-closed-30706207673/size-latency-aws.json` |
 | pipeline admission tests | **current** | `31885975456` | 2026-08-15 | v1.18.2 | fail-open | -- | 5/5 | `results/testcases/testcase-results-aws.json` |
+| pipeline admission tests | **current** | `31908665287` | 2026-08-15 | v1.18.2 | fail-open | -- | 5/5 | `results/testcases/testcase-results-azure.json` |
 | pipeline admission tests | superseded | `30695147871` | 2026-08-01 | v1.11.4 | -- | -- | 5/5 | `results/testcases/superseded-aws-30695147871-kyverno-v1.11.4/testcase-results-aws.json` |
 
-28 artefacts, 11 current, 4 undetermined (did not record a Kyverno version).
+41 artefacts, 24 current, 4 undetermined (did not record a Kyverno version).

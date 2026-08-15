@@ -77,7 +77,9 @@ scripts/
 
   attack_table.py                   — Renders the security tables from their artefacts
   latency_table.py                  — Renders the performance tables from their artefacts
-  render-all-tables.sh              — Regenerates every table into results/TABLES-<cloud>.{tex,md}
+  render-all-tables.sh              — Regenerates every table into results/TABLES-<cloud>.{tex,md};
+                                      pass `both` for one table set with a column per cloud, which
+                                      is the form the dissertation uses
   results-manifest.py               — Rebuilds results/MANIFEST.md: every artefact, its run, its stack
   local/
     install-tools.sh                — Installs cosign, syft, crane locally

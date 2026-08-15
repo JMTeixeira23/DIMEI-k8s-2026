@@ -1,0 +1,7 @@
+{
+  "name": "large",
+  "image_ref": "supplychainthesis.azurecr.io/supply-chain/hello-world@sha256:ffb450393da78952a35e50d059627037a91992af784a8ad31fdc6418f3f2e62a",
+  "digest": "sha256:ffb450393da78952a35e50d059627037a91992af784a8ad31fdc6418f3f2e62a",
+  "compressed_bytes": 72438142,
+  "layer_count": 5
+}

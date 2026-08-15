@@ -71,6 +71,46 @@ case "${MODE}" in
   *)   echo "usage: $0 <on|off>" >&2; exit 2 ;;
 esac
 
+# ── Refuse to roll the deployment under a running measurement (defect D40) ───
+#
+# Changing this flag is a helm upgrade, which rolls kyverno-admission-controller.
+# If a measurement workflow is mid-run when that happens the run is silently
+# ruined in three ways at once: the metrics baseline it snapshotted is gone, the
+# verification cache it was characterising is emptied, and a scrape can address a
+# pod that no longer exists. Observed on 2026-08-15 — six Azure performance runs
+# dispatched back to back with cache flips between them; one failed with
+# `pods "kyverno-admission-controller-…" not found`, one "succeeded" having
+# measured across a restart, and the rest were cancelled by the concurrency group.
+#
+# The dangerous outcome is the middle one. A run that completes across a restart
+# produces a plausible artefact recording a single cache state that was not the
+# state in force for the whole run, and nothing downstream can detect it.
+#
+# Skipped when gh is unavailable or unauthenticated — this is a guard against an
+# ordering mistake, not an authorisation check. SKIP_RUN_CHECK=1 overrides it.
+if [ "${SKIP_RUN_CHECK:-0}" != "1" ] && command -v gh >/dev/null 2>&1; then
+  ACTIVE=$(gh run list --workflow=measure-admission-latency.yml \
+             --status in_progress --limit 5 --json databaseId \
+             -q '.[].databaseId' 2>/dev/null || true)
+  QUEUED=$(gh run list --workflow=measure-admission-latency.yml \
+             --status queued --limit 5 --json databaseId \
+             -q '.[].databaseId' 2>/dev/null || true)
+  BUSY=$(printf '%s %s' "${ACTIVE}" "${QUEUED}" | tr '\n' ' ' | tr -s ' ')
+  if [ -n "${BUSY// /}" ]; then
+    echo "❌ A measurement workflow is in progress or queued:${BUSY}" >&2
+    echo "" >&2
+    echo "   Changing the cache flag rolls the admission controller and would" >&2
+    echo "   ruin that run without failing it — see defect D40. Wait for it to" >&2
+    echo "   finish, then re-run this script." >&2
+    echo "" >&2
+    echo "     gh run watch ${BUSY%% *}" >&2
+    echo "" >&2
+    echo "   Override only if you know the run is already being discarded:" >&2
+    echo "     SKIP_RUN_CHECK=1 $0 ${MODE}" >&2
+    exit 7
+  fi
+fi
+
 mkdir -p "${RESULTS_DIR}"
 
 # The flag as every running admission-controller container reports it, one line

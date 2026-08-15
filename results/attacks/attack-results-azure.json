@@ -1,0 +1,188 @@
+{
+  "run": {
+    "cloud": "azure",
+    "run_id": "31908818193",
+    "run_attempt": "1",
+    "repository": "JMTeixeira23/DIMEI-k8s-2026",
+    "commit": "53d72f54983fa8e480f76a74ca512faeb84e4a2a",
+    "run_url": "https://github.com/JMTeixeira23/DIMEI-k8s-2026/actions/runs/31908818193",
+    "generated": "2026-08-15T21:16:14Z",
+    "kubectl_context": "supply-chain-aks",
+    "kyverno_image": "reg.kyverno.io/kyverno/kyverno:v1.18.2",
+    "kyverno_ready_replicas": "3",
+    "webhook_failure_policies": "kyverno-svc.kyverno.svc=Fail kyverno-cleanup-controller.kyverno.svc=Fail kyverno-svc.kyverno.svc=Fail kyverno-svc.kyverno.svc=Fail validate-policy.kyverno.svc=Fail validate.kyverno.svc-ignore=Ignore kyverno-cleanup-controller.kyverno.svc=Ignore",
+    "default_ns_exclude_label": "always",
+    "admission": {
+      "configuration": "fail-open",
+      "policy_webhooks": "mutate.kyverno.svc-ignore=Ignore validate.kyverno.svc-ignore=Ignore",
+      "clusterpolicy_count": 3,
+      "other_kyverno_webhooks": "kyverno-cleanup-controller.kyverno.svc=Fail kyverno-cleanup-controller.kyverno.svc=Ignore kyverno-svc.kyverno.svc=Fail monitor-webhooks.kyverno.svc=Ignore mutate-policy.kyverno.svc=Fail validate-policy.kyverno.svc=Fail",
+      "webhook_timeout_seconds": "10",
+      "kyverno_ready_replicas": "3",
+      "kyverno_desired_replicas": "3",
+      "pod_disruption_budgets": "kyverno-admission-controller(minAvailable=2,allowed=1)"
+    },
+    "nodes": {
+      "instance_types": "Standard_D2s_v6 x2",
+      "node_count": 2,
+      "nodes_not_ready": 0,
+      "cpu_capacity": "1900m",
+      "memory_capacity": "5925128Ki,5925132Ki",
+      "kubelet_versions": "v1.34.9",
+      "os_images": "Ubuntu 22.04.5 LTS",
+      "zones": "0"
+    },
+    "policies": [
+      {
+        "name": "verify-image-signature",
+        "validationFailureAction": "Enforce",
+        "ready": "true"
+      },
+      {
+        "name": "verify-sbom-cyclonedx",
+        "validationFailureAction": "Enforce",
+        "ready": "true"
+      },
+      {
+        "name": "verify-slsa-provenance",
+        "validationFailureAction": "Enforce",
+        "ready": "true"
+      }
+    ]
+  },
+  "totals": {
+    "total": 7,
+    "pass": 7,
+    "fail": 0,
+    "error": 0
+  },
+  "scenarios": [
+    {
+      "scenario": "A1",
+      "title": "Unsigned image from an unapproved external registry (alpine:latest, docker.io)",
+      "cloud": "azure",
+      "run_id": "31908818193",
+      "requirements": [
+        "SR-05"
+      ],
+      "expected_admission": "DENY",
+      "observed_admission": "DENY",
+      "outcome": "PASS",
+      "expected_rule": "verify-image-signature/block-unapproved-registry",
+      "observed_rule": "verify-image-signature/block-unapproved-registry",
+      "image": "alpine:latest",
+      "detail": "public image deployed directly; no build, no signature, outside the approved registry",
+      "message": "Error from server: admission webhook \"validate.kyverno.svc-ignore\" denied the request: resource Pod/supply-chain-demo/attack1 was blocked due to the following policies verify-image-signature: block-unapproved-registry: Only images from the approved registry (supplychainthesis.azurecr.io) are permitted.",
+      "timestamp": "2026-08-15T21:14:21Z"
+    },
+    {
+      "scenario": "A2",
+      "title": "Valid Cosign signature from the wrong identity (attacker-held local key)",
+      "cloud": "azure",
+      "run_id": "31908818193",
+      "requirements": [
+        "SR-01"
+      ],
+      "expected_admission": "DENY",
+      "observed_admission": "DENY",
+      "outcome": "PASS",
+      "expected_rule": "verify-image-signature/check-image-signature",
+      "observed_rule": "verify-image-signature/check-image-signature,verify-sbom-cyclonedx/check-sbom-cyclonedx,verify-slsa-provenance/check-slsa-provenance",
+      "image": "supplychainthesis.azurecr.io/supply-chain/hello-world@sha256:d94bb5cdae3e0c16236a4cb0ec093f765eab685944d06202c5b57720eb6585d5",
+      "detail": "signed with an attacker-generated key pair, not the pinned OIDC identity",
+      "message": "Error from server: admission webhook \"mutate.kyverno.svc-ignore\" denied the request: resource Pod/supply-chain-demo/attack2 was blocked due to the following policies verify-image-signature: check-image-signature: 'failed to verify image supplychainthesis.azurecr.io/supply-chain/hello-world@sha256:d94bb5cdae3e0c16236a4cb0ec093f765eab685944d06202c5b57720eb6585d5: .attestors[0].entries[0].keyless: no matching signatures: empty key' verify-sbom-cyclonedx: check-sbom-cyclonedx: 'failed to verify image supplychainthesis.azurecr.io/supply-chain/hello-world@sha256:d94bb5cdae3e0c16236a4cb0ec093f765eab685944d06202c5b57720eb6585d5: .attestors[0].entries[0].keyless: no matching signatures: empty key' verify-slsa-provenance: check-slsa-provenance: 'failed to verify image supplychainthesis.azurecr.io/supply-chain/hello-world@sha256:d94bb5cdae3e0c16236a4cb0ec093f765eab685944d06202c5b57720eb6585d5: .attestors[0].entries[0].keyless: no matching signatures: empty key'",
+      "timestamp": "2026-08-15T21:14:40Z"
+    },
+    {
+      "scenario": "A3",
+      "title": "Tag redirected to unsigned content after signing (pre-admission TOCTOU)",
+      "cloud": "azure",
+      "run_id": "31908818193",
+      "requirements": [
+        "SR-02"
+      ],
+      "expected_admission": "DENY",
+      "observed_admission": "DENY",
+      "outcome": "PASS",
+      "expected_rule": "verify-image-signature/check-image-signature",
+      "observed_rule": "verify-image-signature/check-image-signature,verify-sbom-cyclonedx/check-sbom-cyclonedx,verify-slsa-provenance/check-slsa-provenance",
+      "image": "supplychainthesis.azurecr.io/supply-chain/hello-world:attack3-tagmove-31908818193",
+      "detail": "signed D1=sha256:aa86f67fc50f6d10e5aa4c4e16e075e3711e5180924b073d8d01e1c35cda8716; deployed by tag, which now resolves to unsigned D2=sha256:29094f5abdff39efb468e08a8270fcb43af0719d310c09f480222f4e248e6353",
+      "message": "Error from server: admission webhook \"mutate.kyverno.svc-ignore\" denied the request: resource Pod/supply-chain-demo/attack3 was blocked due to the following policies verify-image-signature: check-image-signature: 'failed to verify image supplychainthesis.azurecr.io/supply-chain/hello-world:attack3-tagmove-31908818193: .attestors[0].entries[0].keyless: no signatures found' verify-sbom-cyclonedx: check-sbom-cyclonedx: 'failed to verify image supplychainthesis.azurecr.io/supply-chain/hello-world:attack3-tagmove-31908818193: .attestors[0].entries[0].keyless: no signatures found' verify-slsa-provenance: check-slsa-provenance: 'failed to verify image supplychainthesis.azurecr.io/supply-chain/hello-world:attack3-tagmove-31908818193: .attestors[0].entries[0].keyless: no signatures found'",
+      "timestamp": "2026-08-15T21:15:19Z"
+    },
+    {
+      "scenario": "A4",
+      "title": "Signed, provenance attested, CycloneDX SBOM attestation omitted",
+      "cloud": "azure",
+      "run_id": "31908818193",
+      "requirements": [
+        "SR-03"
+      ],
+      "expected_admission": "DENY",
+      "observed_admission": "DENY",
+      "outcome": "PASS",
+      "expected_rule": "verify-sbom-cyclonedx/check-sbom-cyclonedx",
+      "observed_rule": "verify-sbom-cyclonedx/check-sbom-cyclonedx",
+      "image": "supplychainthesis.azurecr.io/supply-chain/hello-world@sha256:7d417d5ed54a3cc16fad19c77057372c0c81b2200f603882feed475a1b4ae6a2",
+      "detail": "signature and SLSA provenance present; CycloneDX SBOM attestation is the only missing control",
+      "message": "Error from server: admission webhook \"mutate.kyverno.svc-ignore\" denied the request: resource Pod/supply-chain-demo/attack4 was blocked due to the following policies verify-sbom-cyclonedx: check-sbom-cyclonedx: 'image attestations verification failed, verifiedCount: 0, requiredCount: 1, error: .attestations[0].attestors[0].entries[0].keyless: attestions not found for predicate type https://cyclonedx.org/bom'",
+      "timestamp": "2026-08-15T21:15:41Z"
+    },
+    {
+      "scenario": "A5",
+      "title": "Signed, SBOM attested, SLSA provenance attestation omitted",
+      "cloud": "azure",
+      "run_id": "31908818193",
+      "requirements": [
+        "SR-04"
+      ],
+      "expected_admission": "DENY",
+      "observed_admission": "DENY",
+      "outcome": "PASS",
+      "expected_rule": "verify-slsa-provenance/check-slsa-provenance",
+      "observed_rule": "verify-slsa-provenance/check-slsa-provenance",
+      "image": "supplychainthesis.azurecr.io/supply-chain/hello-world@sha256:4275e01e5e5ccc0a69c2a7f442eab51226d7088c2d024609eb66e576ae4959e9",
+      "detail": "signature and CycloneDX SBOM present; SLSA provenance attestation is the only missing control",
+      "message": "Error from server: admission webhook \"mutate.kyverno.svc-ignore\" denied the request: resource Pod/supply-chain-demo/attack5 was blocked due to the following policies verify-slsa-provenance: check-slsa-provenance: 'image attestations verification failed, verifiedCount: 0, requiredCount: 1, error: .attestations[0].attestors[0].entries[0].keyless: attestions not found for predicate type https://slsa.dev/provenance/v1'",
+      "timestamp": "2026-08-15T21:16:01Z"
+    },
+    {
+      "scenario": "A6",
+      "title": "Unsigned image pushed to the approved registry (insider build)",
+      "cloud": "azure",
+      "run_id": "31908818193",
+      "requirements": [
+        "SR-01",
+        "SR-06"
+      ],
+      "expected_admission": "DENY",
+      "observed_admission": "DENY",
+      "outcome": "PASS",
+      "expected_rule": "verify-image-signature/check-image-signature",
+      "observed_rule": "verify-image-signature/check-image-signature,verify-sbom-cyclonedx/check-sbom-cyclonedx,verify-slsa-provenance/check-slsa-provenance",
+      "image": "supplychainthesis.azurecr.io/supply-chain/hello-world@sha256:eb789eeb2c0e8a50cec85fbf8c8007ff2c8982b46cf2ff89891e53ae15bcae15",
+      "detail": "pushed to the approved registry; no Cosign signature and no attestations",
+      "message": "Error from server: admission webhook \"mutate.kyverno.svc-ignore\" denied the request: resource Pod/supply-chain-demo/attack6 was blocked due to the following policies verify-image-signature: check-image-signature: 'failed to verify image supplychainthesis.azurecr.io/supply-chain/hello-world@sha256:eb789eeb2c0e8a50cec85fbf8c8007ff2c8982b46cf2ff89891e53ae15bcae15: .attestors[0].entries[0].keyless: no signatures found' verify-sbom-cyclonedx: check-sbom-cyclonedx: 'failed to verify image supplychainthesis.azurecr.io/supply-chain/hello-world@sha256:eb789eeb2c0e8a50cec85fbf8c8007ff2c8982b46cf2ff89891e53ae15bcae15: .attestors[0].entries[0].keyless: no signatures found' verify-slsa-provenance: check-slsa-provenance: 'failed to verify image supplychainthesis.azurecr.io/supply-chain/hello-world@sha256:eb789eeb2c0e8a50cec85fbf8c8007ff2c8982b46cf2ff89891e53ae15bcae15: .attestors[0].entries[0].keyless: no signatures found'",
+      "timestamp": "2026-08-15T21:16:11Z"
+    },
+    {
+      "scenario": "TC-NS",
+      "title": "Namespace scoping: the A6 unsigned image in the default namespace",
+      "cloud": "azure",
+      "run_id": "31908818193",
+      "requirements": [
+        "SR-07"
+      ],
+      "expected_admission": "ADMIT",
+      "observed_admission": "ADMIT",
+      "outcome": "PASS",
+      "expected_rule": "none (policy match scope)",
+      "observed_rule": "",
+      "image": "supplychainthesis.azurecr.io/supply-chain/hello-world@sha256:eb789eeb2c0e8a50cec85fbf8c8007ff2c8982b46cf2ff89891e53ae15bcae15",
+      "detail": "same artefact denied by A6 in supply-chain-demo; pod phase in default: Pending",
+      "message": "pod/tc-ns-probe created",
+      "timestamp": "2026-08-15T21:16:14Z"
+    }
+  ]
+}

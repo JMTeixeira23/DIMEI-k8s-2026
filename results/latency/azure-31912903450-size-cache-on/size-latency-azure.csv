@@ -1,0 +1,5 @@
+cloud,condition,n,min_ms,p50_ms,p95_ms,p99_ms,max_ms,mean_ms,stdev_ms,rejected,admission_reviews,in_webhook_ms_per_request
+azure,size-small,20,1137,1150,1165,2542,2542,1220,311.26,0,40.0,74.599
+azure,size-medium,20,1134,1151,1245,2441,2441,1222.85,287.83,0,40.0,69.0
+azure,size-large,20,1134,1145,1162,1169,1169,1147.05,9.73,0,40.0,4.872
+azure,size-xlarge,0,,,,,,,,20,,
