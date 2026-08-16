@@ -88,14 +88,19 @@ esac
 #
 # Skipped when gh is unavailable or unauthenticated — this is a guard against an
 # ordering mistake, not an authorisation check. SKIP_RUN_CHECK=1 overrides it.
+#
+# Filtered with jq rather than `gh run list --status`: that flag is absent in
+# some gh versions, and when it is the command errors, `|| true` swallows it, the
+# result is empty and the guard reads as "nothing running" — it never fires and
+# still looks like it passed. The first version of this check had exactly that
+# bug, and testing it while nothing was running could not tell the two apart.
 if [ "${SKIP_RUN_CHECK:-0}" != "1" ] && command -v gh >/dev/null 2>&1; then
-  ACTIVE=$(gh run list --workflow=measure-admission-latency.yml \
-             --status in_progress --limit 5 --json databaseId \
-             -q '.[].databaseId' 2>/dev/null || true)
-  QUEUED=$(gh run list --workflow=measure-admission-latency.yml \
-             --status queued --limit 5 --json databaseId \
-             -q '.[].databaseId' 2>/dev/null || true)
-  BUSY=$(printf '%s %s' "${ACTIVE}" "${QUEUED}" | tr '\n' ' ' | tr -s ' ')
+  BUSY=$(gh run list --workflow=measure-admission-latency.yml --limit 20 \
+           --json databaseId,status \
+           -q '[.[] | select(.status == "in_progress" or .status == "queued"
+                             or .status == "pending" or .status == "requested"
+                             or .status == "waiting")]
+               | map(.databaseId | tostring) | join(" ")' 2>/dev/null || true)
   if [ -n "${BUSY// /}" ]; then
     echo "❌ A measurement workflow is in progress or queued:${BUSY}" >&2
     echo "" >&2

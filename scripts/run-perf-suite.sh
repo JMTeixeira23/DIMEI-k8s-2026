@@ -55,6 +55,69 @@ ARMS="${ARMS:-lat-off sz-off cc-off lat-on sz-on cc-on}"
 
 log() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 
+# ── Precondition: a signed probe image must exist in the registry ────────────
+#
+# `terraform destroy` deletes the container registry and everything in it, so a
+# rebuilt cluster has nothing for the latency probes to admit. The suite then
+# fails ~90 seconds in, at "Resolve the signed image by digest", with
+# `ImageNotFoundException ... imageId {imageDigest:'null', imageTag:'null'}` —
+# observed on run 31938368178, after the AWS node type was changed to m7i.large
+# and the environment rebuilt.
+#
+# Checked here rather than left to fail, because the failure arrives after a
+# helm upgrade has already rolled the deployment, and because the operator's
+# reasonable next move — "re-run the suite" — fails identically until the
+# pipeline is run.
+#
+# The registry cannot be queried without cloud credentials, which this script
+# does not require and which are often absent locally. So the check is indirect:
+# the supply-chain pipeline must have succeeded more recently than the cluster's
+# oldest node was created. That is exactly the rebuild case and does not fire in
+# normal use. Skipped when gh or kubectl is unavailable; override with
+# SKIP_IMAGE_CHECK=1.
+probe_image_precondition() {
+  [ "${SKIP_IMAGE_CHECK:-0}" = "1" ] && return 0
+  command -v gh      >/dev/null 2>&1 || return 0
+  command -v kubectl >/dev/null 2>&1 || return 0
+
+  local node_epoch pipe_iso pipe_epoch
+  node_epoch=$(kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.creationTimestamp}{"\n"}{end}' 2>/dev/null \
+               | sort | head -1)
+  [ -n "${node_epoch}" ] || return 0
+  node_epoch=$(date -u -d "${node_epoch}" +%s 2>/dev/null) || return 0
+
+  # Filtered with jq, not `gh run list --status`: that flag does not exist in
+  # every gh version, and when it is missing the command errors, the error is
+  # swallowed, and an empty result reads exactly like "no runs" — the guard then
+  # never fires and looks like it passed.
+  pipe_iso=$(gh run list --workflow=supply-chain-pipeline.yml --limit 20 \
+               --json conclusion,updatedAt \
+               -q '[.[] | select(.conclusion == "success")] | .[0].updatedAt' \
+               2>/dev/null)
+  if [ -z "${pipe_iso}" ] || [ "${pipe_iso}" = null ]; then
+    pipe_epoch=0
+  else
+    pipe_epoch=$(date -u -d "${pipe_iso}" +%s 2>/dev/null || echo 0)
+  fi
+
+  if [ "${pipe_epoch}" -lt "${node_epoch}" ]; then
+    echo "❌ No successful supply-chain-pipeline run since this cluster was built." >&2
+    echo "" >&2
+    echo "   Nodes created : $(date -u -d "@${node_epoch}" +%Y-%m-%dT%H:%M:%SZ)" >&2
+    echo "   Last pipeline : ${pipe_iso:-never}" >&2
+    echo "" >&2
+    echo "   terraform destroy removes the registry and every image in it, so" >&2
+    echo "   there is no signed probe image to admit and every arm would fail at" >&2
+    echo "   'Resolve the signed image by digest'. Run the pipeline first:" >&2
+    echo "" >&2
+    echo "     gh workflow run supply-chain-pipeline.yml -f cloud=${CLOUD}" >&2
+    echo "" >&2
+    echo "   Then re-run this script. Override with SKIP_IMAGE_CHECK=1." >&2
+    return 1
+  fi
+  return 0
+}
+
 # Dispatch and return the id of the run that dispatch created. `gh run list`
 # right after a dispatch can still return the previous run, so we wait for an id
 # we have not seen before rather than trusting --limit 1.
@@ -133,6 +196,8 @@ arm() {  # arm <name> <on|off> <artefact-glob> <field=value>...
   RESULTS="${RESULTS}${name}\t${id}\t${got}\n"
   return 0
 }
+
+probe_image_precondition || exit 1
 
 RESULTS=""
 FAILED=""
